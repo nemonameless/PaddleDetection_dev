@@ -23,6 +23,7 @@ from ppdet.py_op.target import generate_rpn_anchor_target, generate_proposal_tar
 from ppdet.py_op.post_process import bbox_post_process
 from . import ops
 import paddle.nn.functional as F
+from paddle.vision.ops import DeformConv2D
 
 
 def _to_list(l):
@@ -721,3 +722,96 @@ class FCOSBox(object):
         pred_boxes = paddle.concat(pred_boxes_, axis=1)
         pred_scores = paddle.concat(pred_scores_, axis=2)
         return pred_boxes, pred_scores
+
+
+class DeformableConvV1(nn.Layer):
+    def __init__(self,
+                 in_channels,
+                 out_channels,
+                 kernel_size,
+                 stride=1,
+                 padding=0,
+                 dilation=1,
+                 groups=1,
+                 weight_attr=None,
+                 bias_attr=None,
+                 name=None):
+        super(DeformableConvV1, self).__init__()
+        self.conv = nn.Conv2D(
+            in_channels,
+            2 * kernel_size**2,
+            kernel_size,
+            stride=stride,
+            padding=(kernel_size - 1) // 2,
+            weight_attr=ParamAttr(
+                initializer=Constant(0.0),
+                name='{}.dcn_offset_conv.weight'.format(name)),
+            bias_attr=ParamAttr(
+                initializer=Constant(0.0),
+                name='{}.dcn_offset_conv.bias'.format(name)))
+
+        self.dcn = DeformConv2D(
+            in_channels,
+            out_channels,
+            kernel_size,
+            stride=stride,
+            padding=(kernel_size - 1) // 2 * dilation,
+            dilation=dilation,
+            groups=groups,
+            weight_attr=weight_attr,
+            bias_attr=bias_attr)
+
+    def forward(self, x):
+        offset = self.conv(x)
+        y = self.dcn(x, offset)
+        return y
+
+
+class DeformableConvV2(nn.Layer):
+    def __init__(self,
+                 in_channels,
+                 out_channels,
+                 kernel_size,
+                 stride=1,
+                 padding=0,
+                 dilation=1,
+                 groups=1,
+                 weight_attr=None,
+                 bias_attr=None,
+                 name=None):
+        super(DeformableConvV2, self).__init__()
+        self.offset_channel = 2 * kernel_size**2
+        self.mask_channel = kernel_size**2
+        self.offset_conv = nn.Conv2D(
+            in_channels,
+            3 * kernel_size**2,
+            kernel_size,
+            stride=stride,
+            padding=(kernel_size - 1) // 2,
+            weight_attr=ParamAttr(
+                initializer=Constant(0.0),
+                name='{}.offset_conv.weight'.format(name)),
+            bias_attr=ParamAttr(
+                initializer=Constant(0.0),
+                name='{}.offset_conv.bias'.format(name)))
+
+        self.dcn_conv = DeformConv2D(
+            in_channels,
+            out_channels,
+            kernel_size,
+            stride=stride,
+            padding=(kernel_size - 1) // 2 * dilation,
+            dilation=dilation,
+            groups=groups,
+            weight_attr=weight_attr,
+            bias_attr=bias_attr)
+
+    def forward(self, x):
+        offset_mask = self.offset_conv(x)
+        offset, mask = paddle.split(
+            offset_mask,
+            num_or_sections=[self.offset_channel, self.mask_channel],
+            axis=1)
+        mask = F.sigmoid(mask)
+        y = self.dcn_conv(x, offset, mask=mask)
+        return y

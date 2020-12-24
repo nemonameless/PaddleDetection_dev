@@ -12,7 +12,7 @@ from paddle.nn import Conv2D, BatchNorm2D, GroupNorm, SyncBatchNorm
 from paddle.nn.initializer import Normal, Constant, XavierUniform
 from paddle.regularizer import L2Decay
 from ppdet.core.workspace import register
-from ppdet.modeling import ops
+from ppdet.modeling.ops import DeformableConvV2
 
 class ConvNormLayer(nn.Layer):
     def __init__(self,
@@ -27,7 +27,12 @@ class ConvNormLayer(nn.Layer):
         super(ConvNormLayer, self).__init__()
         assert norm_type in ['bn', 'sync_bn', 'gn']
 
-        self.conv = Conv2D(
+        if use_dcn==False:
+            ConvLayer = Conv2D
+        else:
+            ConvLayer = DeformableConvV2
+
+        self.conv = ConvLayer(
             in_channels=ch_in,
             out_channels=ch_out,
             kernel_size=filter_size,
