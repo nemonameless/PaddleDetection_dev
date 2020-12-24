@@ -12,7 +12,7 @@ from paddle.nn import Conv2D, BatchNorm2D, GroupNorm, SyncBatchNorm
 from paddle.nn.initializer import Normal, Constant, XavierUniform
 from paddle.regularizer import L2Decay
 from ppdet.core.workspace import register
-from ppdet.modeling.ops import DeformableConvV2
+from ppdet.modeling.layers import DeformableConvV2
 
 class ConvNormLayer(nn.Layer):
     def __init__(self,
@@ -28,25 +28,38 @@ class ConvNormLayer(nn.Layer):
         assert norm_type in ['bn', 'sync_bn', 'gn']
 
         if use_dcn==False:
-            ConvLayer = Conv2D
+            self.conv = Conv2D(
+                in_channels=ch_in,
+                out_channels=ch_out,
+                kernel_size=filter_size,
+                stride=stride,
+                padding=(filter_size - 1) // 2,
+                groups=1,
+                weight_attr=ParamAttr(
+                    name=name + "_weight",
+                    initializer=Normal(mean=0., std=0.01),
+                    learning_rate=1.),
+                bias_attr = ParamAttr(
+                    name=name + "_bias",
+                    initializer=Constant(value=0),
+                    learning_rate=2.))
         else:
-            ConvLayer = DeformableConvV2
-
-        self.conv = ConvLayer(
-            in_channels=ch_in,
-            out_channels=ch_out,
-            kernel_size=filter_size,
-            stride=stride,
-            padding=(filter_size - 1) // 2,
-            groups=1,
-            weight_attr=ParamAttr(
-                name=name + "_weight",
-                initializer=Normal(mean=0., std=0.01),
-                learning_rate=1.),
-            bias_attr = ParamAttr(
-                name=name + "_bias",
-                initializer=Constant(value=0),
-                learning_rate=2.))
+            self.conv = DeformableConvV2(
+                in_channels=ch_in,
+                out_channels=ch_out,
+                kernel_size=filter_size,
+                stride=stride,
+                padding=(filter_size - 1) // 2,
+                groups=1,
+                weight_attr=ParamAttr(
+                    name=name + "_weight",
+                    initializer=Normal(mean=0., std=0.01),
+                    learning_rate=1.),
+                bias_attr = ParamAttr(
+                    name=name + "_bias",
+                    initializer=Constant(value=0),
+                    learning_rate=2.),
+                name=name)
 
         param_attr = ParamAttr(
             name=norm_name + "_scale",
@@ -281,4 +294,5 @@ class FCOSHead(nn.Layer):
     def get_loss(self, fcos_head_outs, tag_labels, tag_bboxes, tag_centerness):
         cls_logits, bboxes_reg, centerness = fcos_head_outs
         return self.fcos_loss(cls_logits, bboxes_reg, centerness, tag_labels, tag_bboxes, tag_centerness)
+
 

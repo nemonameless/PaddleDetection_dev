@@ -24,7 +24,6 @@ from ppdet.core.workspace import register, serializable
 from paddle.regularizer import L2Decay
 from .name_adapter import NameAdapter
 from numbers import Integral
-from ppdet.modeling.ops import batch_norm
 from ppdet.modeling.layers import DeformableConvV2
 
 __all__ = ['ResNet', 'Res5Head']
@@ -69,7 +68,7 @@ class ConvNormLayer(nn.Layer):
                 padding=(filter_size - 1) // 2,
                 groups=1,
                 weight_attr=ParamAttr(
-                    learning_rate=lr, name=name + '_dcn_weights'),
+                    learning_rate=lr, name=name + '_conv_dcn_weights'),
                 bias_attr=False,
                 name=name)
 
@@ -370,3 +369,4 @@ class Res5Head(nn.Layer):
     def forward(self, roi_feat, stage=0):
         y = self.res5(roi_feat)
         return y
+

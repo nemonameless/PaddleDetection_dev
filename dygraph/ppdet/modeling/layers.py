@@ -17,13 +17,15 @@ import numpy as np
 from numbers import Integral
 
 import paddle
-from paddle import to_tensor
+import paddle.nn as nn
+from paddle import to_tensor, ParamAttr
 from ppdet.core.workspace import register, serializable
 from ppdet.py_op.target import generate_rpn_anchor_target, generate_proposal_target, generate_mask_target
 from ppdet.py_op.post_process import bbox_post_process
 from . import ops
 import paddle.nn.functional as F
 from paddle.vision.ops import DeformConv2D
+from paddle.nn.initializer import Constant
 
 
 def _to_list(l):
@@ -737,7 +739,7 @@ class DeformableConvV1(nn.Layer):
                  bias_attr=None,
                  name=None):
         super(DeformableConvV1, self).__init__()
-        self.conv = nn.Conv2D(
+        self.conv_offset = nn.Conv2D(
             in_channels,
             2 * kernel_size**2,
             kernel_size,
@@ -745,12 +747,12 @@ class DeformableConvV1(nn.Layer):
             padding=(kernel_size - 1) // 2,
             weight_attr=ParamAttr(
                 initializer=Constant(0.0),
-                name='{}.dcn_offset_conv.weight'.format(name)),
+                name='{}._conv_offset.weight'.format(name)),
             bias_attr=ParamAttr(
                 initializer=Constant(0.0),
-                name='{}.dcn_offset_conv.bias'.format(name)))
+                name='{}._conv_offset.bias'.format(name)))
 
-        self.dcn = DeformConv2D(
+        self.conv_dcn = DeformConv2D(
             in_channels,
             out_channels,
             kernel_size,
@@ -762,8 +764,8 @@ class DeformableConvV1(nn.Layer):
             bias_attr=bias_attr)
 
     def forward(self, x):
-        offset = self.conv(x)
-        y = self.dcn(x, offset)
+        offset = self.conv_offset(x)
+        y = self.conv_dcn(x, offset)
         return y
 
 
@@ -782,7 +784,7 @@ class DeformableConvV2(nn.Layer):
         super(DeformableConvV2, self).__init__()
         self.offset_channel = 2 * kernel_size**2
         self.mask_channel = kernel_size**2
-        self.offset_conv = nn.Conv2D(
+        self.conv_offset = nn.Conv2D(
             in_channels,
             3 * kernel_size**2,
             kernel_size,
@@ -790,12 +792,12 @@ class DeformableConvV2(nn.Layer):
             padding=(kernel_size - 1) // 2,
             weight_attr=ParamAttr(
                 initializer=Constant(0.0),
-                name='{}.offset_conv.weight'.format(name)),
+                name='{}._conv_offset.weight'.format(name)),
             bias_attr=ParamAttr(
                 initializer=Constant(0.0),
-                name='{}.offset_conv.bias'.format(name)))
+                name='{}._conv_offset.bias'.format(name)))
 
-        self.dcn_conv = DeformConv2D(
+        self.conv_dcn = DeformConv2D(
             in_channels,
             out_channels,
             kernel_size,
@@ -807,11 +809,12 @@ class DeformableConvV2(nn.Layer):
             bias_attr=bias_attr)
 
     def forward(self, x):
-        offset_mask = self.offset_conv(x)
+        offset_mask = self.conv_offset(x)
         offset, mask = paddle.split(
             offset_mask,
             num_or_sections=[self.offset_channel, self.mask_channel],
             axis=1)
         mask = F.sigmoid(mask)
-        y = self.dcn_conv(x, offset, mask=mask)
+        y = self.conv_dcn(x, offset, mask=mask)
         return y
+
