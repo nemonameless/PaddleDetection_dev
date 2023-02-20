@@ -34,12 +34,14 @@ class DETR(BaseArch):
                  backbone,
                  transformer='DETRTransformer',
                  detr_head='DETRHead',
+                 neck=None,
                  post_process='DETRBBoxPostProcess',
                  exclude_post_process=False):
         super(DETR, self).__init__()
         self.backbone = backbone
         self.transformer = transformer
         self.detr_head = detr_head
+        self.neck = neck
         self.post_process = post_process
         self.exclude_post_process = exclude_post_process
 
@@ -47,9 +49,16 @@ class DETR(BaseArch):
     def from_config(cls, cfg, *args, **kwargs):
         # backbone
         backbone = create(cfg['backbone'])
-        # transformer
+
+        # neck
         kwargs = {'input_shape': backbone.out_shape}
+        neck = create(cfg['neck'], **kwargs) if cfg['neck'] else None
+
+        # transformer
+        if neck is not None:
+            kwargs = {'input_shape': neck.out_shape}
         transformer = create(cfg['transformer'], **kwargs)
+
         # head
         kwargs = {
             'hidden_dim': transformer.hidden_dim,
@@ -62,14 +71,17 @@ class DETR(BaseArch):
             'backbone': backbone,
             'transformer': transformer,
             "detr_head": detr_head,
+            "neck": neck
         }
 
     def _forward(self):
         # Backbone
         body_feats = self.backbone(self.inputs)
+        if self.neck is not None:
+            body_feats = self.neck(body_feats)
 
         # Transformer
-        pad_mask = self.inputs['pad_mask'] if self.training else None
+        pad_mask = self.inputs.get('pad_mask', None)
         out_transformer = self.transformer(body_feats, pad_mask, self.inputs)
 
         # DETR Head
