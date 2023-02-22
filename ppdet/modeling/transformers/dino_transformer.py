@@ -26,6 +26,7 @@ import paddle.nn as nn
 import paddle.nn.functional as F
 from paddle import ParamAttr
 from paddle.regularizer import L2Decay
+from IPython import embed
 
 from ppdet.core.workspace import register
 from ..layers import MultiHeadAttention
@@ -300,7 +301,7 @@ class DINOTransformerDecoder(nn.Layer):
 
 @register
 class DINOTransformer(nn.Layer):
-    __shared__ = ['num_classes', 'hidden_dim']
+    __shared__ = ['num_classes', 'hidden_dim', 'for_distill']
 
     def __init__(self,
                  num_classes=80,
@@ -324,6 +325,7 @@ class DINOTransformer(nn.Layer):
                  label_noise_ratio=0.5,
                  box_noise_scale=1.0,
                  learnt_init_query=True,
+                 for_distill=False,
                  eps=1e-2):
         super(DINOTransformer, self).__init__()
         assert position_embed_type in ['sine', 'learned'], \
@@ -398,6 +400,11 @@ class DINOTransformer(nn.Layer):
             for _ in range(num_decoder_layers)
         ])
 
+        # detr distill
+        self.for_distill = for_distill
+        if for_distill:
+            self.distill_pairs = dict()
+
         self._reset_parameters()
 
     def _reset_parameters(self):
@@ -467,6 +474,9 @@ class DINOTransformer(nn.Layer):
                 else:
                     proj_feats.append(self.input_proj[i](proj_feats[-1]))
 
+        if self.for_distill:
+            self.distill_pairs['proj_feats'] = proj_feats
+
         # get encoder inputs
         feat_flatten = []
         mask_flatten = []
@@ -490,6 +500,11 @@ class DINOTransformer(nn.Layer):
             if pad_mask is not None:
                 # [b, h*w]
                 mask_flatten.append(mask.flatten(1))
+            # print('feat_flatten h, w', feat_flatten[-1].shape, h, w)
+            # [1, 13500, 256] 135 100
+            # [1, 3400, 256] 68 50
+            # [1, 850, 256] 34 25
+            # [1, 221, 256] 17 13
 
         # [b, l, c]
         feat_flatten = paddle.concat(feat_flatten, 1)
@@ -512,17 +527,29 @@ class DINOTransformer(nn.Layer):
                 lvl_pos_embed_flatten, valid_ratios)
 
     def forward(self, feats, pad_mask=None, gt_meta=None):
+        if self.for_distill:
+            self.distill_pairs['body_feats'] = feats
+        # feats: swin [1, 384, 100, 150] [1, 768, 50, 75] [1, 1536, 25, 38]
+        # feats: r50  [1, 512, 100, 150] [1, 1024, 50, 75] [1, 2048, 25, 38]
         # input projection and embedding
         (feat_flatten, spatial_shapes, level_start_index, mask_flatten,
          lvl_pos_embed_flatten,
          valid_ratios) = self._get_encoder_input(feats, pad_mask)
+        # feat_flatten.shape [1, 17971, 256]
+
+        if self.for_distill:
+            self.distill_pairs['feat_flatten'] = feat_flatten
+            self.distill_pairs['spatial_shapes'] = spatial_shapes
+            self.distill_pairs['level_start_index'] = level_start_index
 
         # encoder
         memory = self.encoder(feat_flatten, spatial_shapes, level_start_index,
                               mask_flatten, lvl_pos_embed_flatten, valid_ratios)
+        # memory.shape [1, 17971, 256]
 
         # prepare denoising training
-        if self.training:
+        is_teacher = gt_meta['is_teacher']
+        if self.training and not is_teacher:
             denoising_class, denoising_bbox_unact, attn_mask, dn_meta = \
                 get_contrastive_denoising_training_group(gt_meta,
                                             self.num_classes,
@@ -533,20 +560,30 @@ class DINOTransformer(nn.Layer):
                                             self.box_noise_scale)
         else:
             denoising_class, denoising_bbox_unact, attn_mask, dn_meta = None, None, None, None
+        # dn_meta:
+        # {'dn_positive_idx': [Tensor(shape=[100], dtype=int64, place=Place(gpu:0), stop_gradient=True,
+        #         [0  , 2  , 4  , 6  , 8  , 10 , 12 , 14 , 16 , 18 , 20 , 22 , 24 , 26)],
+        # 'dn_num_group': 100,
+        # 'dn_num_split': [200, 900]}
 
         target, init_ref_points_unact, enc_topk_bboxes, enc_topk_logits = \
             self._get_decoder_input(
             memory, spatial_shapes, mask_flatten, denoising_class,
             denoising_bbox_unact)
+        # [2, 1100, 256] [2, 1100, 4] [2, 900, 4] [2, 900, 80] train
+        # [2, 900, 256] [2, 900, 4] [2, 900, 4] [2, 900, 80] val
 
         # decoder
         inter_feats, inter_ref_bboxes_unact = self.decoder(
             target, init_ref_points_unact, memory, spatial_shapes,
             level_start_index, self.dec_bbox_head, self.query_pos_head,
             valid_ratios, attn_mask, mask_flatten)
+        # [6, 1, 1100, 256] [6, 1, 1100, 4] train
+        # [6, 1, 900, 256] [6, 1, 900, 4] val
         out_bboxes = []
         out_logits = []
         for i in range(self.num_decoder_layers):
+            # [6, 1, 900, 256] -> [6, 1, 900, 4/80]
             out_logits.append(self.dec_score_head[i](inter_feats[i]))
             if i == 0:
                 out_bboxes.append(
@@ -559,7 +596,12 @@ class DINOTransformer(nn.Layer):
 
         out_bboxes = paddle.stack(out_bboxes)
         out_logits = paddle.stack(out_logits)
+        if self.for_distill:
+            # self.distill_pairs['pos_query_dec'] = init_ref_points_unact
+            self.distill_pairs['out_bboxes_kd'] = out_bboxes[-1]
+            self.distill_pairs['out_logits_kd'] = out_logits[-1]
 
+        # [6, bs, 900, 4] [6, bs, 900, 80] [bs, 900, 4] [bs, 900, 80]
         return (out_bboxes, out_logits, enc_topk_bboxes, enc_topk_logits,
                 dn_meta)
 
@@ -622,6 +664,13 @@ class DINOTransformer(nn.Layer):
 
         _, topk_ind = paddle.topk(
             enc_outputs_class.max(-1), self.num_queries, axis=1)
+
+        if self.for_distill:
+            self.distill_pairs['proj_queries'] = output_memory
+            self.distill_pairs['topk_ind'] = topk_ind
+            self.distill_pairs['enc_outputs_logits'] = enc_outputs_class
+            self.distill_pairs['enc_outputs_bboxes'] = F.sigmoid(enc_outputs_coord_unact)
+
         # extract region proposal boxes
         batch_ind = paddle.arange(end=bs, dtype=topk_ind.dtype)
         batch_ind = batch_ind.unsqueeze(-1).tile([1, self.num_queries])

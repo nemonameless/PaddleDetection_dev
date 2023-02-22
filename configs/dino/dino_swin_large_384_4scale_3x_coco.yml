@@ -1,0 +1,37 @@
+_BASE_: [
+  '../datasets/coco_detection.yml',
+  '../runtime.yml',
+  '_base_/optimizer_swin_3x.yml',
+  '_base_/dino_swin.yml',
+  #'_base_/dino_reader.yml',
+  '_base_/yoloe_reader.yml',
+]
+
+weights: output/dino_swin_large_384_4scale_3x_coco/model_final
+find_unused_parameters: True
+log_iter: 20
+snapshot_epoch: 1
+
+
+DETR:
+  backbone: SwinTransformer
+  transformer: DINOTransformer
+  detr_head: DINOHead
+  post_process: DETRBBoxPostProcess
+
+SwinTransformer:
+  arch: 'swin_L_384'
+  ape: false
+  drop_path_rate: 0.2
+  patch_norm: true
+  out_indices: [1, 2, 3]
+
+DINOTransformer:
+  num_queries: 900
+  pe_temperature: 10000 # 20 in r50
+  pe_offset: -0.5 # 0.0 in r50
+
+
+worker_num: 2
+TrainReader:
+  batch_size: 2

@@ -1,0 +1,94 @@
+# teacher and slim config
+# _BASE_: [
+#   './dino_swin_large_384_4scale_3x_coco.yml',
+# ]
+log_iter: 20
+snapshot_epoch: 1
+
+for_distill: True
+
+architecture: DETR
+# pretrain_weights: # rewrite in SwinTransformer.pretrained in ppdet/modeling/backbones/swin_transformer.py
+pretrain_weights: ../detrex_dino_swin_large_4scale.pdparams #~ # https://bj.bcebos.com/v1/paddledet/models/dino_swin_large_384_4scale_3x_coco.pdparams
+find_unused_parameters: True
+hidden_dim: 256
+use_focal_loss: True
+
+DETR:
+  backbone: SwinTransformer
+  neck: ~
+  transformer: DINOTransformer
+  detr_head: DINOHead
+  post_process: DETRBBoxPostProcess
+
+SwinTransformer:
+  arch: 'swin_L_384' # ['swin_T_224', 'swin_S_224', 'swin_B_224', 'swin_L_224', 'swin_B_384', 'swin_L_384']
+  ape: false
+  drop_path_rate: 0.2
+  patch_norm: true
+  out_indices: [1, 2, 3]
+
+DINOTransformer:
+  num_queries: 900
+  position_embed_type: sine
+  num_levels: 4
+  nhead: 8
+  num_encoder_layers: 6
+  num_decoder_layers: 6
+  dim_feedforward: 2048
+  dropout: 0.0
+  activation: relu
+  pe_temperature: 10000
+  pe_offset: -0.5
+  num_denoising: 100
+  label_noise_ratio: 0.5
+  box_noise_scale: 1.0
+  learnt_init_query: True
+
+DINOHead:
+  loss:
+    name: DINOLoss
+    loss_coeff: {class: 1, bbox: 5, giou: 2}
+    aux_loss: True
+    for_distill: True #
+    matcher:
+      name: HungarianMatcher
+      matcher_coeff: {class: 2, bbox: 5, giou: 2}
+
+DETRBBoxPostProcess:
+  num_top_queries: 300
+
+
+# worker_num: 2
+# TrainReader:
+#   sample_transforms:
+#     - Decode: {}
+#     - RandomFlip: {prob: 0.5}
+#     - Resize: {target_size: [640, 640], keep_ratio: False}
+#     # - RandomSelect: { transforms1: [ RandomShortSideResize: { short_side_sizes: [ 480, 512, 544, 576, 608, 640, 672, 704, 736, 768, 800 ], max_size: 1333 } ],
+#     #                   transforms2: [
+#     #                       RandomShortSideResize: { short_side_sizes: [ 400, 500, 600 ] },
+#     #                       RandomSizeCrop: { min_size: 384, max_size: 600 },
+#     #                       RandomShortSideResize: { short_side_sizes: [ 480, 512, 544, 576, 608, 640, 672, 704, 736, 768, 800 ], max_size: 1333 } ]
+#     # }
+#     - NormalizeImage: {is_scale: true, mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225]}
+#     # - NormalizeBox: {} # no need
+#     # - BboxXYXY2XYWH: {} # no need
+#     - Permute: {}
+#   batch_size: 2
+#   shuffle: true
+#   drop_last: true
+#   collate_batch: false
+#   use_shared_memory: false
+
+
+
+
+slim: Distill
+slim_method: DINODistill
+distill_loss: DistillPPDINOLoss
+
+DistillPPDINOLoss: # swin-L-384 -> r50vd
+  loss_weight: {'logits': 1.0, 'feat': 5.0}
+  logits_distill: False
+  feat_distill: True

@@ -26,6 +26,7 @@ import paddle.nn as nn
 import paddle.nn.functional as F
 from paddle import ParamAttr
 from paddle.regularizer import L2Decay
+from IPython import embed
 
 from ppdet.core.workspace import register
 from ..layers import MultiHeadAttention
@@ -179,7 +180,7 @@ class TransformerDecoder(nn.Layer):
 
 @register
 class PPDETRTransformer(nn.Layer):
-    __shared__ = ['num_classes', 'hidden_dim', 'eval_size']
+    __shared__ = ['num_classes', 'hidden_dim', 'eval_size', 'for_distill']
 
     def __init__(self,
                  num_classes=80,
@@ -199,6 +200,7 @@ class PPDETRTransformer(nn.Layer):
                  label_noise_ratio=0.5,
                  box_noise_scale=1.0,
                  learnt_init_query=True,
+                 for_distill=False,
                  eval_size=None,
                  eps=1e-2):
         super(PPDETRTransformer, self).__init__()
@@ -266,6 +268,11 @@ class PPDETRTransformer(nn.Layer):
             MLP(hidden_dim, hidden_dim, 4, num_layers=3)
             for _ in range(num_decoder_layers)
         ])
+
+        # detr distill
+        self.for_distill = for_distill
+        if for_distill:
+            self.distill_pairs = dict()
 
         self._reset_parameters()
 
@@ -339,6 +346,9 @@ class PPDETRTransformer(nn.Layer):
                 else:
                     proj_feats.append(self.input_proj[i](proj_feats[-1]))
 
+        if self.for_distill:
+            self.distill_pairs['proj_feats'] = proj_feats
+
         # get encoder inputs
         feat_flatten = []
         spatial_shapes = []
@@ -361,12 +371,22 @@ class PPDETRTransformer(nn.Layer):
         return (feat_flatten, spatial_shapes, level_start_index)
 
     def forward(self, feats, pad_mask=None, gt_meta=None):
+        if self.for_distill:
+            self.distill_pairs['body_feats'] = feats
+        # feats: [2, 512, 80, 80] [2, 512, 40, 40] [2, 512, 20, 20]
         # input projection and embedding
         (memory, spatial_shapes,
          level_start_index) = self._get_encoder_input(feats)
+        # memory.shape [1, ?, 256]
+
+        if self.for_distill:
+            self.distill_pairs['feat_flatten'] = memory
+            self.distill_pairs['spatial_shapes'] = spatial_shapes
+            self.distill_pairs['level_start_index'] = level_start_index
 
         # prepare denoising training
-        if self.training:
+        is_teacher = gt_meta['is_teacher']
+        if self.training and not is_teacher:
             denoising_class, denoising_bbox_unact, attn_mask, dn_meta = \
                 get_contrastive_denoising_training_group(gt_meta,
                                             self.num_classes,
@@ -381,7 +401,7 @@ class PPDETRTransformer(nn.Layer):
         target, init_ref_points_unact, enc_topk_bboxes, enc_topk_logits = \
             self._get_decoder_input(
             memory, spatial_shapes, denoising_class, denoising_bbox_unact)
-
+        # [2, 300, 256] [2, 300, 4] [2, 300, 4] [2, 300, 80]
         # decoder
         out_bboxes, out_logits = self.decoder(
             target,
@@ -393,6 +413,13 @@ class PPDETRTransformer(nn.Layer):
             self.dec_score_head,
             self.query_pos_head,
             attn_mask=attn_mask)
+
+        if self.for_distill:
+            # self.distill_pairs['pos_query_dec'] = init_ref_points_unact
+            self.distill_pairs['out_bboxes_kd'] = out_bboxes[-1]
+            self.distill_pairs['out_logits_kd'] = out_logits[-1]
+
+        # [1, 2, 300, 4] [1, 2, 300, 80]
         return (out_bboxes, out_logits, enc_topk_bboxes, enc_topk_logits,
                 dn_meta)
 
@@ -448,6 +475,13 @@ class PPDETRTransformer(nn.Layer):
 
         _, topk_ind = paddle.topk(
             enc_outputs_class.max(-1), self.num_queries, axis=1)
+
+        if self.for_distill:
+            self.distill_pairs['proj_queries'] = output_memory
+            self.distill_pairs['topk_ind'] = topk_ind
+            self.distill_pairs['enc_outputs_logits'] = enc_outputs_class
+            self.distill_pairs['enc_outputs_bboxes'] = F.sigmoid(enc_outputs_coord_unact)
+
         # extract region proposal boxes
         batch_ind = paddle.arange(end=bs, dtype=topk_ind.dtype)
         batch_ind = batch_ind.unsqueeze(-1).tile([1, self.num_queries])

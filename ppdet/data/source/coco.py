@@ -18,6 +18,9 @@ try:
     from collections.abc import Sequence
 except Exception:
     from collections import Sequence
+
+import json
+from collections import defaultdict
 import numpy as np
 from ppdet.core.workspace import register, serializable
 from .dataset import DetDataset
@@ -58,7 +61,9 @@ class COCODataSet(DetDataset):
                  load_crowd=False,
                  allow_empty=False,
                  empty_ratio=1.,
-                 repeat=1):
+                 repeat=1,
+                 proposal_file=None,
+                 proposal_num=300):
         super(COCODataSet, self).__init__(
             dataset_dir,
             image_dir,
@@ -71,6 +76,22 @@ class COCODataSet(DetDataset):
         self.load_crowd = load_crowd
         self.allow_empty = allow_empty
         self.empty_ratio = empty_ratio
+
+        if proposal_file is not None:
+            self.imgid2proposal = self._load_proposal(proposal_file)
+        else:
+            self.imgid2proposal = None
+        self.proposal_num = proposal_num
+
+    def _load_proposal(self, proposal_file):
+        imgid2proposal = defaultdict(list)
+        with open(proposal_file, 'r') as f:
+            proposals = json.load(f)
+
+        for proposal in proposals:
+            image_id = proposal.pop('image_id')
+            imgid2proposal[image_id].append(proposal)
+        return imgid2proposal
 
     def _sample_empty(self, records, num):
         # if empty_ratio is out of [0. ,1.), do not sample the records
@@ -218,6 +239,40 @@ class COCODataSet(DetDataset):
                 }
                 if has_track_id:
                     gt_rec.update({'gt_track_id': gt_track_id})
+
+                # load proposals
+                if self.imgid2proposal is not None:
+                    proposal_bbox, proposal_class, proposal_score = [], [], []
+                    for proposal in self.imgid2proposal[img_id]:
+                        x, y, w, h = proposal['bbox']
+                        proposal_bbox.append([x, y, x + w, y + h])
+                        proposal_score.append([proposal['score']])
+                        proposal_class.append(
+                            [self.catid2clsid[proposal['category_id']]])
+
+                    proposal_bbox = np.array(
+                        proposal_bbox, dtype=np.float32) if len(
+                            proposal_bbox) > 0 else np.zeros(
+                                (0, 4), dtype=np.float32)
+                    proposal_class = np.array(
+                        proposal_class, dtype=np.int32) if len(
+                            proposal_class) > 0 else np.zeros(
+                                (0, 1), dtype=np.int32)
+                    proposal_score = np.array(
+                        proposal_score, dtype=np.float32) if len(
+                            proposal_score) > 0 else np.zeros(
+                                (0, 1), dtype=np.float32)
+                    if len(proposal_bbox) > self.proposal_num:
+                        sort_idx = proposal_score.squeeze(-1).argsort()[
+                            -self.proposal_num:]
+                        proposal_bbox = proposal_bbox[sort_idx]
+                        proposal_class = proposal_class[sort_idx]
+                        proposal_score = proposal_score[sort_idx]
+                    gt_rec.update({
+                        'proposal_bbox': proposal_bbox,
+                        'proposal_class': proposal_class,
+                        'proposal_score': proposal_score
+                    })
 
                 for k, v in gt_rec.items():
                     if k in self.data_fields:

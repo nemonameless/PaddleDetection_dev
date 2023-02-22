@@ -24,6 +24,7 @@ import paddle
 import paddle.nn as nn
 import paddle.nn.functional as F
 from paddle import ParamAttr
+from IPython import embed
 
 from ppdet.core.workspace import register
 from ..layers import MultiHeadAttention
@@ -472,6 +473,7 @@ class DeformableTransformer(nn.Layer):
         return {'backbone_num_channels': [i.channels for i in input_shape], }
 
     def forward(self, src_feats, src_mask=None, *args, **kwargs):
+        # feats: [1, 512, 100, 150] [1, 1024, 50, 75] [1, 2048, 25, 38]
         srcs = []
         for i in range(len(src_feats)):
             srcs.append(self.input_proj[i](src_feats[i]))
@@ -520,11 +522,11 @@ class DeformableTransformer(nn.Layer):
         # encoder
         memory = self.encoder(src_flatten, spatial_shapes, level_start_index,
                               mask_flatten, lvl_pos_embed_flatten, valid_ratios)
-
+        # [1, 17971, 256]
         # prepare input for decoder
         bs, _, c = memory.shape
         query_embed = self.query_pos_embed.weight.unsqueeze(0).tile([bs, 1, 1])
-        tgt = self.tgt_embed.weight.unsqueeze(0).tile([bs, 1, 1])
+        tgt = self.tgt_embed.weight.unsqueeze(0).tile([bs, 1, 1]) # [1, 300, 256]
         reference_points = F.sigmoid(self.reference_points(query_embed))
         reference_points_input = reference_points.unsqueeze(
             2) * valid_ratios.unsqueeze(1)
@@ -532,5 +534,5 @@ class DeformableTransformer(nn.Layer):
         # decoder
         hs = self.decoder(tgt, reference_points_input, memory, spatial_shapes,
                           level_start_index, mask_flatten, query_embed)
-
+        # [6, 1, 300, 256]
         return (hs, memory, reference_points)

@@ -8,5 +8,113 @@ _BASE_: [
 
 weights: output/dino_r50vd_pan_4_0_6_3x_coco/model_final
 find_unused_parameters: True
-log_iter: 100
-snapshot_epoch: 2
+log_iter: 20
+snapshot_epoch: 1
+
+
+worker_num: 2
+TrainReader:
+  sample_transforms:
+    - Decode: {}
+    - RandomDistort: {prob: 0.8}
+    - RandomExpand: {fill_value: [123.675, 116.28, 103.53]}
+    - RandomCrop: {prob: 0.8}
+    - RandomFlip: {}
+  batch_transforms:
+    #- BatchRandomResize: {target_size: [640], random_size: True, random_interp: True, keep_ratio: False}
+    - BatchRandomResize: {target_size: [480, 512, 544, 576, 608, 640, 640, 640, 672, 704, 736, 768, 800], random_size: True, random_interp: True, keep_ratio: False}
+    - NormalizeImage: {mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225], is_scale: True}
+    - NormalizeBox: {}
+    - BboxXYXY2XYWH: {}
+    - Permute: {}
+  batch_size: 2
+  shuffle: true
+  drop_last: true
+  collate_batch: false
+  use_shared_memory: false
+
+EvalReader:
+  sample_transforms:
+    - Decode: {}
+    - Resize: {target_size: [640, 640], keep_ratio: False}
+    - NormalizeImage: {mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225], is_scale: True}
+    - Permute: {}
+  batch_size: 2
+
+TestReader:
+  sample_transforms:
+    - Decode: {}
+    - Resize: { target_size: [ 640, 640 ], keep_ratio: False }
+    - NormalizeImage: {mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225], is_scale: True}
+    - Permute: {}
+  batch_size: 1
+
+
+for_distill: True
+
+architecture: DETR
+pretrain_weights: https://paddledet.bj.bcebos.com/models/pretrained/ResNet50_vd_ssld_v2_pretrained.pdparams
+norm_type: sync_bn
+use_ema: True
+ema_decay: 0.9999
+ema_decay_type: "exponential"
+hidden_dim: 256
+use_focal_loss: True
+
+
+DETR:
+  backbone: ResNet
+  neck: YOLOCSPPAN
+  transformer: PPDETRTransformer
+  detr_head: DINOHead
+  post_process: DETRBBoxPostProcess
+
+ResNet:
+  # index 0 stands for res2
+  depth: 50
+  variant: d
+  norm_type: bn
+  freeze_at: 0
+  return_idx: [1, 2, 3]
+  lr_mult_list: [0.1, 0.1, 0.1, 0.1]
+  num_stages: 4
+  freeze_stem_only: True
+
+YOLOCSPPAN:
+  depthwise: False
+  use_trans: True
+  nhead: 8
+  num_layers: 2
+  dim_feedforward: 2048
+  dropout: 0.1
+  activation: 'gelu'
+  proj_dim: [512, 512, 512]
+
+PPDETRTransformer:
+  num_queries: 900 # 300
+  position_embed_type: sine
+  num_levels: 4
+  nhead: 8
+  num_decoder_layers: 6
+  dim_feedforward: 2048
+  dropout: 0.0
+  activation: relu
+  num_denoising: 100
+  label_noise_ratio: 0.5
+  box_noise_scale: 1.0
+  learnt_init_query: True
+  eval_size: [640, 640]
+
+DINOHead:
+  loss:
+    name: DINOLoss
+    loss_coeff: {class: 1, bbox: 5, giou: 2}
+    aux_loss: True
+    use_vfl: True #
+    matcher:
+      name: HungarianMatcher
+      matcher_coeff: {class: 2, bbox: 5, giou: 2}
+      use_pos_only: True #
+
+DETRBBoxPostProcess:
+  num_top_queries: 300

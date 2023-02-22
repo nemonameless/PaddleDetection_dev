@@ -7,11 +7,26 @@ TrainDataset:
   anno_path: annotations/instances_train2017.json
   dataset_dir: dataset/coco
   data_fields: ['image', 'gt_bbox', 'gt_class', 'is_crowd']
+  # proposal_file: 'dino_swin_large_384_4scale_3x_coco_train2017_bbox.json'
+  # data_fields: ['image', 'gt_bbox', 'gt_class', 'is_crowd', 'proposal_bbox', 'proposal_class', 'proposal_score']
+
+
+TrainDataset2:
+  name: COCODataSet
+  image_dir: val2017
+  anno_path: annotations/instances_val2017.json
+  #anno_path: annotations/instances_val2017_rand24.json
+  #anno_path: annotations/instances_val2017_8img.json
+  dataset_dir: dataset/coco
+  data_fields: ['image', 'gt_bbox', 'gt_class', 'is_crowd']
+
 
 EvalDataset:
   name: COCODataSet
   image_dir: val2017
-  anno_path: annotations/instances_val2017.json
+  #anno_path: annotations/instances_val2017.json
+  anno_path: annotations/instances_val2017_8img.json
+  #anno_path: annotations/instances_val2017_rand24.json
   dataset_dir: dataset/coco
   allow_empty: true
 

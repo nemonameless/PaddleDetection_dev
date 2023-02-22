@@ -30,6 +30,7 @@ __all__ = [
     'CWDDistillModel',
     'LDDistillModel',
     'PPYOLOEDistillModel',
+    'DINODistillModel',
 ]
 
 
@@ -67,7 +68,7 @@ class DistillModel(nn.Layer):
         if stu_pretrain:
             if self.is_inherit and tea_pretrain:
                 load_pretrain_weight(self.student_model, tea_pretrain)
-                logger.debug(
+                logger.info(
                     "Inheriting! loading teacher weights to student model!")
             load_pretrain_weight(self.student_model, stu_pretrain)
             logger.info("Student model has loaded pretrain weights!")
@@ -350,4 +351,41 @@ class PPYOLOEDistillModel(DistillModel):
             student_loss['feat_loss'] = feat_loss
             return student_loss
         else:
+            return self.student_model(inputs)
+
+
+@register
+class DINODistillModel(DistillModel):
+    """
+    Build DINO distill model.
+    Args:
+        cfg: The student config.
+        slim_cfg: The teacher and distill config.
+    """
+    def __init__(self, cfg, slim_cfg):
+        super(DINODistillModel, self).__init__(cfg=cfg, slim_cfg=slim_cfg)
+        assert self.arch in ['DETR'], 'Unsupported arch: {}'.format(self.arch)
+
+    def forward(self, inputs):
+        if self.training:
+            with paddle.no_grad(): 
+                # with paddle.amp.auto_cast(enable=True):
+                inputs['is_teacher'] = True
+                teacher_loss = self.teacher_model(inputs)
+            
+            inputs['is_teacher'] = False
+            student_loss = self.student_model(inputs)
+
+            logits_loss, feat_loss = self.distill_loss(self.teacher_model,
+                                                       self.student_model)
+            det_total_loss = student_loss['loss']
+            total_loss = det_total_loss + logits_loss + feat_loss
+            student_loss['loss'] = total_loss
+            student_loss['stu_loss'] = det_total_loss
+            student_loss['logits_loss'] = logits_loss # 0.0
+            student_loss['feat_loss'] = feat_loss
+            student_loss['tea_loss'] = teacher_loss['loss'] # just print
+            return student_loss
+        else:
+            inputs['is_teacher'] = False
             return self.student_model(inputs)

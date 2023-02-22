@@ -1,0 +1,55 @@
+# teacher and slim config
+_BASE_: [
+  './dino_swin_large_384_4scale_3x_coco.yml',
+]
+log_iter: 5
+snapshot_epoch: 1
+
+for_distill: True
+
+architecture: DETR
+# pretrain_weights: # rewrite in SwinTransformer.pretrained in ppdet/modeling/backbones/swin_transformer.py
+pretrain_weights: ../detrex_dino_swin_large_4scale.pdparams #~ # https://bj.bcebos.com/v1/paddledet/models/dino_swin_large_384_4scale_3x_coco.pdparams
+find_unused_parameters: True
+hidden_dim: 256
+use_focal_loss: True
+
+DETR:
+  backbone: SwinTransformer
+  transformer: DINOTransformer
+  detr_head: DINOHead
+  post_process: DETRBBoxPostProcess
+
+SwinTransformer:
+  arch: 'swin_L_384' # ['swin_T_224', 'swin_S_224', 'swin_B_224', 'swin_L_224', 'swin_B_384', 'swin_L_384']
+  ape: false
+  drop_path_rate: 0.2
+  patch_norm: true
+  out_indices: [1, 2, 3]
+
+DINOTransformer:
+  num_queries: 900
+  pe_temperature: 10000 # 20 in r50
+  pe_offset: -0.5 # 0.0 in r50
+  # for_distill: True
+
+DINOHead:
+  loss:
+    name: DINOLoss
+    loss_coeff: {class: 1, bbox: 5, giou: 2}
+    aux_loss: True
+    for_distill: True #
+    matcher:
+      name: HungarianMatcher
+      matcher_coeff: {class: 2, bbox: 5, giou: 2}
+
+
+slim: Distill
+slim_method: DINODistill
+distill_loss: DistillDINOLoss
+
+DistillDINOLoss: # swin-L-384 -> r50
+  loss_weight: {'logits': 1.0, 'feat': 5.0}
+  #loss_weight: {'logits': 1.0, 'feat': 20.0}
+  logits_distill: False
+  feat_distill: True

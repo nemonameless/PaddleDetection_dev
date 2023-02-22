@@ -5,7 +5,26 @@ _BASE_: [
   '_base_/dino_r50.yml',
   '_base_/dino_reader.yml',
 ]
-
+pretrain_weights: https://paddledet.bj.bcebos.com/models/pretrained/ResNet50_cos_pretrained.pdparams
 weights: output/dino_r50_4scale_1x_coco/model_final
 find_unused_parameters: True
-log_iter: 100
+log_iter: 20
+snapshot_epoch: 1
+
+for_distill: True
+
+DINOTransformer:
+  num_queries: 900
+  pe_temperature: 20
+  pe_offset: 0.0
+  # for_distill: True
+
+DINOHead:
+  loss:
+    name: DINOLoss
+    loss_coeff: {class: 1, bbox: 5, giou: 2}
+    aux_loss: True
+    for_distill: True
+    matcher:
+      name: HungarianMatcher
+      matcher_coeff: {class: 2, bbox: 5, giou: 2}

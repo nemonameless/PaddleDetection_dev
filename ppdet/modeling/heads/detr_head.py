@@ -288,6 +288,7 @@ class DETRHead(nn.Layer):
             return (outputs_bbox[-1], outputs_logit[-1], outputs_seg)
 
 
+from IPython import embed
 @register
 class DeformableDETRHead(nn.Layer):
     __shared__ = ['num_classes', 'hidden_dim']
@@ -340,6 +341,7 @@ class DeformableDETRHead(nn.Layer):
         """
         feats, memory, reference_points = out_transformer
         reference_points = inverse_sigmoid(reference_points.unsqueeze(0))
+        # [6, 1, 300, 256] -> [6, 1, 300, 4/80]
         outputs_bbox = self.bbox_head(feats)
 
         # It's equivalent to "outputs_bbox[:, :, :, :2] += reference_points",
@@ -351,8 +353,9 @@ class DeformableDETRHead(nn.Layer):
             ],
             axis=-1)
 
-        outputs_bbox = F.sigmoid(outputs_bbox)
-        outputs_logit = self.score_head(feats)
+        # [6, 1, 300, 256] -> [6, 1, 300, 4/80]
+        outputs_bbox = F.sigmoid(outputs_bbox) # [6, 1, 300, 4]
+        outputs_logit = self.score_head(feats) # [6, 1, 300, 80]
 
         if self.training:
             assert inputs is not None
@@ -394,12 +397,15 @@ class DINOHead(nn.Layer):
                 [enc_topk_logits.unsqueeze(0), dec_out_logits])
 
             return self.loss(
-                out_bboxes,
-                out_logits,
+                out_bboxes, # [7, 1, 900, 4]
+                out_logits, # [7, 1, 900, 80]
                 inputs['gt_bbox'],
                 inputs['gt_class'],
-                dn_out_bboxes=dn_out_bboxes,
-                dn_out_logits=dn_out_logits,
+                proposal_bbox=inputs.get('proposal_bbox', None),
+                proposal_class=inputs.get('proposal_class', None),
+                proposal_score=inputs.get('proposal_score', None),
+                dn_out_bboxes=dn_out_bboxes, # [6, 1, 200, 4]
+                dn_out_logits=dn_out_logits, # [6, 1, 200, 80]
                 dn_meta=dn_meta)
         else:
             return (dec_out_bboxes[self.eval_idx],
