@@ -23,13 +23,14 @@ from ppdet.core.workspace import register
 from .iou_loss import GIoULoss
 from ..transformers import bbox_cxcywh_to_xyxy, sigmoid_focal_loss, varifocal_loss_with_logits
 from ..bbox_utils import bbox_iou
+from IPython import embed
 
 __all__ = ['DETRLoss', 'DINOLoss']
 
 
 @register
 class DETRLoss(nn.Layer):
-    __shared__ = ['num_classes', 'use_focal_loss']
+    __shared__ = ['num_classes', 'use_focal_loss', 'for_distill']
     __inject__ = ['matcher']
 
     def __init__(self,
@@ -47,7 +48,8 @@ class DETRLoss(nn.Layer):
                  use_focal_loss=False,
                  use_vfl=False,
                  use_same_match=False,
-                 same_match_ind=0):
+                 same_match_ind=0,
+                 for_distill=False):
         r"""
         Args:
             num_classes (int): The number of classes.
@@ -67,6 +69,10 @@ class DETRLoss(nn.Layer):
         self.use_vfl = use_vfl
         self.use_same_match = use_same_match
         self.same_match_ind = same_match_ind
+
+        self.for_distill = for_distill
+        if self.for_distill:
+            self.distill_pairs = {}
 
         if not self.use_focal_loss:
             self.loss_coeff['class'] = paddle.full([num_classes + 1],
@@ -255,6 +261,29 @@ class DETRLoss(nn.Layer):
         ])
         return src_assign, target_assign
 
+    def _get_src_target_assign_all(self, logit, src, label, target, match_indices):
+        logit_assign = paddle.concat([
+            paddle.gather(
+                t, I, axis=0) if len(I) > 0 else paddle.zeros([0, t.shape[-1]])
+            for t, (I, _) in zip(logit, match_indices)
+        ])
+        src_assign = paddle.concat([
+            paddle.gather(
+                t, I, axis=0) if len(I) > 0 else paddle.zeros([0, t.shape[-1]])
+            for t, (I, _) in zip(src, match_indices)
+        ])
+        label_assign = paddle.concat([
+            paddle.gather(
+                t, J, axis=0) if len(J) > 0 else paddle.zeros([0, t.shape[-1]])
+            for t, (_, J) in zip(label, match_indices)
+        ])
+        target_assign = paddle.concat([
+            paddle.gather(
+                t, J, axis=0) if len(J) > 0 else paddle.zeros([0, t.shape[-1]])
+            for t, (_, J) in zip(target, match_indices)
+        ])
+        return logit_assign, src_assign, label_assign, target_assign
+
     def forward(self,
                 boxes,
                 logits,
@@ -288,6 +317,19 @@ class DETRLoss(nn.Layer):
             paddle.distributed.all_reduce(num_gts)
             num_gts /= paddle.distributed.get_world_size()
         num_gts = paddle.clip(num_gts, min=1.) * kwargs.get("dn_num_group", 1.)
+
+        if self.for_distill and postfix == '':
+            if sum(len(a) for a in gt_bbox) > 0:
+                src_logit, src_bbox, target_cls, target_bbox = self._get_src_target_assign_all(
+                    logits[-1].detach(), boxes[-1].detach(), gt_class, gt_bbox, match_indices)
+                iou_score = bbox_iou(
+                    bbox_cxcywh_to_xyxy(src_bbox).split(4, -1),
+                    bbox_cxcywh_to_xyxy(target_bbox).split(4, -1))
+            else:
+                iou_score = None
+            self.distill_pairs['match_indices' + postfix] = match_indices
+            self.distill_pairs['src_logit' + postfix] = src_logit
+            self.distill_pairs['iou_score' + postfix] = iou_score
 
         total_loss = dict()
         if boxes is not None and self.use_vfl:

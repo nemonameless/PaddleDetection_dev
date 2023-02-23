@@ -36,6 +36,7 @@ __all__ = [
     'CWDFeatureLoss',
     'PKDFeatureLoss',
     'MGDFeatureLoss',
+    'DistillPPDINOLoss',
 ]
 
 
@@ -471,6 +472,76 @@ class CWDFeatureLoss(nn.Layer):
         loss = paddle.sum(-softmax_pred_t * paddle.log(eps + softmax_pred_s) +
                           softmax_pred_t * paddle.log(eps + softmax_pred_t))
         return self.loss_weight * loss / (C * N)
+
+
+@register
+class DistillPPDINOLoss(nn.Layer):
+    def __init__(
+            self,
+            loss_weight={'logits': 1.0,
+                         'feat': 20.0},
+            logits_distill=False,
+            feat_distill=True,
+            feat_distiller='aafd',
+            student_channels=[512, 1024, 2048], # r50
+            teacher_channels=[384, 768, 1536]): # swin-L-384
+        super(DistillPPDINOLoss, self).__init__()
+        self.loss_weight_logits = loss_weight['logits']
+        self.loss_weight_feat = loss_weight['feat']
+        self.logits_distill = logits_distill
+        self.feat_distill = feat_distill
+
+        self.mse_loss = nn.MSELoss(reduction='none')
+        # if logits_distill and self.loss_weight_logits > 0:
+
+        # if feat_distill and self.loss_weight_feat > 0:
+        #     assert feat_distiller in ['aafd', 'mimic']
+
+    def forward(self, teacher_model, student_model):
+        teacher_distill_pairs = teacher_model.transformer.distill_pairs
+        student_distill_pairs = student_model.transformer.distill_pairs
+
+        teacher_loss_distill_pairs = teacher_model.detr_head.loss.distill_pairs
+
+        # if self.logits_distill and self.loss_weight_logits > 0:
+        logits_loss = paddle.zeros([1])
+        gamma = 0.5
+
+        if self.feat_distill and self.loss_weight_feat > 0:
+            inputs = student_model.inputs
+            assert 'gt_bbox' in inputs
+            stu_feats = student_distill_pairs['feat_flatten'] # [bs, hw, d]
+            tea_feats = teacher_distill_pairs['feat_flatten'] # [bs, hw, d]
+            tea_proj_queries = teacher_distill_pairs['proj_queries'] # [bs, M, d]
+            _, hw, d = stu_feats.shape
+            _, M, d = tea_proj_queries.shape
+
+            soft_mask = F.sigmoid(paddle.matmul(tea_proj_queries, tea_feats.transpose([0, 2, 1])))
+            # soft_mask.shape [2, 300, 8500] # [bs, M, hw]
+            # tea_feats.shape [2, 8500, 256] # [bs, hw, d]
+            loss_mimic = self.mse_loss(paddle.matmul(soft_mask, tea_feats), paddle.matmul(soft_mask, stu_feats)) # [2, 300, 256]
+
+            tea_match_indices = teacher_loss_distill_pairs['match_indices']
+            tea_src_logit = teacher_loss_distill_pairs['src_logit'] # [5, 80]
+            scores = F.softmax(tea_src_logit).max(-1).unsqueeze(-1)
+
+            tea_iou_score = teacher_loss_distill_pairs['iou_score'] # [5, 1]
+            q_score = scores.pow(gamma) * tea_iou_score.pow(1 - gamma)
+
+            loss_mimic_valid = paddle.concat([
+                paddle.gather(
+                    t, I, axis=0) if len(I) > 0 else paddle.zeros([0, t.shape[-1]])
+                for t, (I, _) in zip(loss_mimic, tea_match_indices)
+            ]) # [5, 256]
+
+            feat_loss = q_score * loss_mimic_valid
+            feat_loss = feat_loss.sum() / (d * hw * M)
+        else:
+            feat_loss = paddle.zeros([1])
+
+        student_model.transformer.distill_pairs.clear()
+        teacher_model.transformer.distill_pairs.clear()
+        return logits_loss * self.loss_weight_logits, feat_loss * self.loss_weight_feat
 
 
 @register
