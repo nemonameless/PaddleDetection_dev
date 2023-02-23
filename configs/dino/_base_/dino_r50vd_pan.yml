@@ -1,0 +1,69 @@
+architecture: DETR
+pretrain_weights: https://paddledet.bj.bcebos.com/models/pretrained/ResNet50_vd_ssld_v2_pretrained.pdparams
+norm_type: sync_bn
+use_ema: True
+ema_decay: 0.9999
+ema_decay_type: "exponential"
+hidden_dim: 256
+use_focal_loss: True
+
+
+DETR:
+  backbone: ResNet
+  neck: YOLOCSPPAN
+  transformer: PPDETRTransformer
+  detr_head: DINOHead
+  post_process: DETRBBoxPostProcess
+
+ResNet:
+  # index 0 stands for res2
+  depth: 50
+  variant: d
+  norm_type: bn
+  freeze_at: 0
+  return_idx: [1, 2, 3]
+  lr_mult_list: [0.1, 0.1, 0.1, 0.1]
+  num_stages: 4
+  freeze_stem_only: True
+
+YOLOCSPPAN:
+  depthwise: False
+  use_trans: True
+  nhead: 8
+  num_layers: 2
+  dim_feedforward: 1024
+  dropout: 0.1
+  activation: 'gelu'
+  proj_dim: [256, 256, 256]
+  proj_use_conv: True
+
+PPDETRTransformer:
+  num_queries: 300
+  position_embed_type: sine
+  num_levels: 3
+  nhead: 8
+  num_decoder_layers: 6
+  dim_feedforward: 1024
+  dropout: 0.0
+  activation: relu
+  num_denoising: 100
+  label_noise_ratio: 0.5
+  box_noise_scale: 1.0
+  learnt_init_query: True
+  eval_size: [640, 640]
+
+DINOHead:
+  loss:
+    name: DINOLoss
+    loss_coeff: {class: 1, bbox: 5, giou: 2}
+    aux_loss: True
+    use_vfl: True
+    use_same_match: True
+    same_match_ind: 0
+    matcher:
+      name: HungarianMatcher
+      matcher_coeff: {class: 2, bbox: 5, giou: 2}
+      use_pos_only: True
+
+DETRBBoxPostProcess:
+  num_top_queries: 300
