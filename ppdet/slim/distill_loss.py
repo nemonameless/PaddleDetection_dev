@@ -25,6 +25,9 @@ from paddle import ParamAttr
 from ppdet.core.workspace import register
 from ppdet.modeling import ops
 from ppdet.modeling.losses.iou_loss import GIoULoss
+from ppdet.modeling.losses.detr_loss import DETRLoss, DINOLoss
+from ppdet.modeling.transformers import bbox_cxcywh_to_xyxy
+from ppdet.modeling.bbox_utils import bbox_iou
 from ppdet.utils.logger import setup_logger
 logger = setup_logger(__name__)
 
@@ -36,6 +39,8 @@ __all__ = [
     'CWDFeatureLoss',
     'PKDFeatureLoss',
     'MGDFeatureLoss',
+    'DistillDETRLoss',
+    'DistillDINOLoss',
 ]
 
 
@@ -917,3 +922,198 @@ class SSIM(nn.Layer):
 
         return self._ssim(img1, img2, window, self.window_size, channel,
                           self.size_average)
+
+
+@register
+class DistillDETRLoss(DETRLoss):
+    def _get_loss_aux_distill(self,
+                              boxes,
+                              logits,
+                              boxes_t,
+                              logits_t,
+                              gt_bbox,
+                              gt_class,
+                              bg_index,
+                              num_gts,
+                              dn_match_indices=None,
+                              postfix="",
+                              gt_score=None):
+        if boxes is None or logits is None:
+            return {
+                "loss_class_aux" + postfix: paddle.paddle.zeros([1]),
+                "loss_bbox_aux" + postfix: paddle.paddle.zeros([1]),
+                "loss_giou_aux" + postfix: paddle.paddle.zeros([1])
+            }
+        loss_class = []
+        loss_bbox = []
+        loss_giou = []
+        for aux_boxes, aux_logits, aux_boxes_t, aux_logits_t in zip(
+                boxes, logits, boxes_t, logits_t):
+            if dn_match_indices is None:
+                match_indices = self.matcher(aux_boxes_t, aux_logits_t, gt_bbox,
+                                             gt_class)
+            else:
+                match_indices = dn_match_indices
+            if self.use_vfl:
+                if sum(len(a) for a in gt_bbox) > 0:
+                    src_bbox, target_bbox = self._get_src_target_assign(
+                        aux_boxes.detach(), gt_bbox, match_indices)
+                    iou_score = bbox_iou(
+                        bbox_cxcywh_to_xyxy(src_bbox).split(4, -1),
+                        bbox_cxcywh_to_xyxy(target_bbox).split(4, -1))
+                else:
+                    iou_score = None
+            else:
+                iou_score = None
+            loss_class.append(
+                self._get_loss_class(
+                    aux_logits,
+                    gt_class,
+                    match_indices,
+                    bg_index,
+                    num_gts,
+                    postfix,
+                    iou_score,
+                    gt_score=gt_score)['loss_class' + postfix])
+            loss_ = self._get_loss_bbox(
+                aux_boxes,
+                gt_bbox,
+                match_indices,
+                num_gts,
+                postfix,
+                gt_score=gt_score)
+            loss_bbox.append(loss_['loss_bbox' + postfix])
+            loss_giou.append(loss_['loss_giou' + postfix])
+        loss = {
+            "loss_class_aux" + postfix: paddle.add_n(loss_class),
+            "loss_bbox_aux" + postfix: paddle.add_n(loss_bbox),
+            "loss_giou_aux" + postfix: paddle.add_n(loss_giou)
+        }
+        return loss
+
+    def forward(self,
+                boxes,
+                logits,
+                boxes_t,
+                logits_t,
+                gt_bbox,
+                gt_class,
+                masks=None,
+                gt_mask=None,
+                postfix="_distill",
+                gt_score=None,
+                **kwargs):
+        r"""
+        Args:
+            boxes (Tensor|None): [l, b, query, 4]
+            logits (Tensor|None): [l, b, query, num_classes]
+            gt_bbox (List(Tensor)): list[[n, 4]]
+            gt_class (List(Tensor)): list[[n, 1]]
+            masks (Tensor, optional): [b, query, h, w]
+            gt_mask (List(Tensor), optional): list[[n, H, W]]
+            postfix (str): postfix of loss name
+        """
+        dn_match_indices = kwargs.get("dn_match_indices", None)
+        if dn_match_indices is None and (boxes is not None and
+                                         logits is not None):
+            match_indices = self.matcher(
+                boxes_t[-1].detach(), logits_t[-1].detach(), gt_bbox, gt_class)
+        else:
+            match_indices = dn_match_indices
+
+        num_gts = sum(len(a) for a in gt_bbox)
+        num_gts = paddle.to_tensor([num_gts], dtype="float32")
+        if paddle.distributed.get_world_size() > 1:
+            paddle.distributed.all_reduce(num_gts)
+            num_gts /= paddle.distributed.get_world_size()
+        num_gts = paddle.clip(num_gts, min=1.) * kwargs.get("dn_num_group", 1.)
+
+        total_loss = dict()
+        if boxes is not None and self.use_vfl:
+            if sum(len(a) for a in gt_bbox) > 0:
+                src_bbox, target_bbox = self._get_src_target_assign(
+                    boxes[-1].detach(), gt_bbox, match_indices)
+                iou_score = bbox_iou(
+                    bbox_cxcywh_to_xyxy(src_bbox).split(4, -1),
+                    bbox_cxcywh_to_xyxy(target_bbox).split(4, -1))
+            else:
+                iou_score = None
+        else:
+            iou_score = None
+        total_loss.update(
+            self._get_loss_class(
+                logits[-1] if logits is not None else None,
+                gt_class,
+                match_indices,
+                self.num_classes,
+                num_gts,
+                postfix,
+                iou_score,
+                gt_score=gt_score))
+        total_loss.update(
+            self._get_loss_bbox(
+                boxes[-1] if boxes is not None else None,
+                gt_bbox,
+                match_indices,
+                num_gts,
+                postfix,
+                gt_score=gt_score))
+
+        if self.aux_loss:
+            total_loss.update(
+                self._get_loss_aux_distill(
+                    boxes[:-1] if boxes is not None else None,
+                    logits[:-1] if logits is not None else None,
+                    boxes_t[:-1] if boxes_t is not None else None,
+                    logits_t[:-1] if logits_t is not None else None,
+                    gt_bbox,
+                    gt_class,
+                    self.num_classes,
+                    num_gts,
+                    dn_match_indices,
+                    postfix,
+                    gt_score=gt_score))
+
+        return total_loss
+
+
+@register
+class DistillDINOLoss(DistillDETRLoss):
+    def forward(self,
+                boxes,
+                logits,
+                boxes_t,
+                logits_t,
+                gt_bbox,
+                gt_class,
+                proposal_bbox=None,
+                proposal_class=None,
+                proposal_score=None,
+                masks=None,
+                gt_mask=None,
+                postfix="_distill",
+                dn_meta=None,
+                **kwargs):
+
+        if dn_meta is not None:
+            dn_out_bboxes, boxes = paddle.split(
+                boxes, dn_meta['dn_num_split'], axis=2)
+            dn_out_logits, logits = paddle.split(
+                logits, dn_meta['dn_num_split'], axis=2)
+            _, boxes_t = paddle.split(boxes_t, dn_meta['dn_num_split'], axis=2)
+            _, logits_t = paddle.split(
+                logits_t, dn_meta['dn_num_split'], axis=2)
+        else:
+            dn_out_bboxes, dn_out_logits = None, None
+
+        # for distill, do not using dino loss and proposal loss
+        total_loss = super(DistillDINOLoss, self).forward(
+            boxes,
+            logits,
+            boxes_t,
+            logits_t,
+            gt_bbox,
+            gt_class,
+            postfix=postfix)
+
+        return total_loss

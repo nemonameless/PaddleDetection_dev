@@ -51,7 +51,12 @@ def bbox_xyxy_to_cxcywh(x):
         [(x1 + x2) / 2, (y1 + y2) / 2, (x2 - x1), (y2 - y1)], axis=-1)
 
 
-def sigmoid_focal_loss(logit, label, normalizer=1.0, alpha=0.25, gamma=2.0):
+def sigmoid_focal_loss(logit,
+                       label,
+                       normalizer=1.0,
+                       alpha=0.25,
+                       gamma=2.0,
+                       loss_weight=None):
     prob = F.sigmoid(logit)
     ce_loss = F.binary_cross_entropy_with_logits(logit, label, reduction="none")
     p_t = prob * label + (1 - prob) * (1 - label)
@@ -60,6 +65,9 @@ def sigmoid_focal_loss(logit, label, normalizer=1.0, alpha=0.25, gamma=2.0):
     if alpha >= 0:
         alpha_t = alpha * label + (1 - alpha) * (1 - label)
         loss = alpha_t * loss
+
+    if loss_weight is not None:
+        loss = loss * loss_weight
     return loss.mean(1).sum() / normalizer
 
 
@@ -270,9 +278,12 @@ def varifocal_loss_with_logits(pred_logits,
                                label,
                                normalizer=1.0,
                                alpha=0.75,
-                               gamma=2.0):
+                               gamma=2.0,
+                               loss_weight=None):
     pred_score = F.sigmoid(pred_logits)
     weight = alpha * pred_score.pow(gamma) * (1 - label) + gt_score * label
     loss = F.binary_cross_entropy_with_logits(
         pred_logits, gt_score, weight=weight, reduction='none')
+    if loss_weight is not None:
+        loss = loss * loss_weight
     return loss.mean(1).sum() / normalizer

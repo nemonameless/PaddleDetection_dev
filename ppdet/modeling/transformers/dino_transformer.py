@@ -300,7 +300,7 @@ class DINOTransformerDecoder(nn.Layer):
 
 @register
 class DINOTransformer(nn.Layer):
-    __shared__ = ['num_classes', 'hidden_dim']
+    __shared__ = ['num_classes', 'hidden_dim', 'for_distill']
 
     def __init__(self,
                  num_classes=80,
@@ -324,6 +324,7 @@ class DINOTransformer(nn.Layer):
                  label_noise_ratio=0.5,
                  box_noise_scale=1.0,
                  learnt_init_query=True,
+                 for_distill=False,
                  eps=1e-2):
         super(DINOTransformer, self).__init__()
         assert position_embed_type in ['sine', 'learned'], \
@@ -397,6 +398,9 @@ class DINOTransformer(nn.Layer):
             MLP(hidden_dim, hidden_dim, 4, num_layers=3)
             for _ in range(num_decoder_layers)
         ])
+        self.for_distill = for_distill
+        if self.for_distill:
+            self.distill_pairs = dict()
 
         self._reset_parameters()
 
@@ -559,6 +563,40 @@ class DINOTransformer(nn.Layer):
 
         out_bboxes = paddle.stack(out_bboxes)
         out_logits = paddle.stack(out_logits)
+        if self.for_distill:
+            if 'tad_pos_query_dec' in gt_meta:
+                pos_query_dec_t = gt_meta['tad_pos_query_dec']
+                target_query_dec_t = gt_meta['tad_target_query_dec']
+                attn_mask_t = gt_meta['tad_attn_mask']
+                # decoder
+                inter_feats_t, inter_ref_bboxes_unact_t = self.decoder(
+                    target_query_dec_t, pos_query_dec_t, memory, spatial_shapes,
+                    level_start_index, self.dec_bbox_head, self.query_pos_head,
+                    valid_ratios, attn_mask_t, mask_flatten)
+
+                out_bboxes_t = []
+                out_logits_t = []
+                for i in range(self.num_decoder_layers):
+                    out_logits_t.append(self.dec_score_head[i](inter_feats_t[
+                        i]))
+                    if i == 0:
+                        out_bboxes_t.append(
+                            F.sigmoid(self.dec_bbox_head[i](inter_feats_t[i]) +
+                                      pos_query_dec_t))
+                    else:
+                        out_bboxes_t.append(
+                            F.sigmoid(self.dec_bbox_head[i](inter_feats_t[i]) +
+                                      inter_ref_bboxes_unact_t[i - 1]))
+
+                self.distill_pairs['tad_out_bboxes'] = out_bboxes_t
+                self.distill_pairs['tad_out_logits'] = out_logits_t
+            else:
+                self.distill_pairs['tad_pos_query_dec'] = init_ref_points_unact
+                self.distill_pairs['tad_target_query_dec'] = target
+                self.distill_pairs['tad_out_bboxes'] = out_bboxes
+                self.distill_pairs['tad_out_logits'] = out_logits
+                self.distill_pairs['tad_dn_meta'] = dn_meta
+                self.distill_pairs['tad_attn_mask'] = attn_mask
 
         return (out_bboxes, out_logits, enc_topk_bboxes, enc_topk_logits,
                 dn_meta)

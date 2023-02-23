@@ -816,6 +816,10 @@ class RandomFlip(BaseOperator):
             im = self.apply_image(im)
             if 'gt_bbox' in sample and len(sample['gt_bbox']) > 0:
                 sample['gt_bbox'] = self.apply_bbox(sample['gt_bbox'], width)
+            if 'proposal_bbox' in sample and len(sample['proposal_bbox']) > 0:
+                for i in range(len(sample['proposal_bbox'])):
+                    sample['proposal_bbox'][i] = self.apply_bbox(
+                        sample['proposal_bbox'][i], width)
             if 'gt_poly' in sample and len(sample['gt_poly']) > 0:
                 sample['gt_poly'] = self.apply_segm(sample['gt_poly'], height,
                                                     width)
@@ -1001,6 +1005,13 @@ class Resize(BaseOperator):
         if 'gt_areas' in sample:
             sample['gt_areas'] = self.apply_area(sample['gt_areas'],
                                                  [im_scale_x, im_scale_y])
+
+        # apply bbox
+        if 'proposal_bbox' in sample and len(sample['proposal_bbox']) > 0:
+            for i in range(len(sample['proposal_bbox'])):
+                sample['proposal_bbox'][i] = self.apply_bbox(
+                    sample['proposal_bbox'][i], [im_scale_x, im_scale_y],
+                    [resize_w, resize_h])
 
         # apply polygon
         if 'gt_poly' in sample and len(sample['gt_poly']) > 0:
@@ -1709,6 +1720,24 @@ class RandomCrop(BaseOperator):
                     return sample
 
                 sample['gt_bbox'] = np.take(cropped_box, valid_ids, axis=0)
+                if 'proposal_bbox' in sample and len(sample[
+                        'proposal_bbox']) > 0:
+                    for i in range(len(sample['proposal_bbox'])):
+                        cropped_proposal, valid_proposal_ids = self._crop_box_with_center_constraint(
+                            sample['proposal_bbox'][i],
+                            np.array(
+                                crop_box, dtype=np.float32))
+                        sample['proposal_bbox'][i] = np.take(
+                            cropped_proposal, valid_proposal_ids, axis=0)
+                        sample['proposal_class'][i] = np.take(
+                            sample['proposal_class'][i],
+                            valid_proposal_ids,
+                            axis=0)
+                        sample['proposal_score'][i] = np.take(
+                            sample['proposal_score'][i],
+                            valid_proposal_ids,
+                            axis=0)
+
                 sample['gt_class'] = np.take(
                     sample['gt_class'], valid_ids, axis=0)
                 if 'gt_score' in sample:
@@ -2029,6 +2058,13 @@ class NormalizeBox(BaseOperator):
             gt_bbox[i][3] = gt_bbox[i][3] / height
         sample['gt_bbox'] = gt_bbox
 
+        if 'proposal_bbox' in sample and len(sample['proposal_bbox']) > 0:
+            for i in range(len(sample['proposal_bbox'])):
+                proposal_bbox = sample['proposal_bbox'][i]
+                proposal_bbox[:, 0::2] = proposal_bbox[:, 0::2] / width
+                proposal_bbox[:, 1::2] = proposal_bbox[:, 1::2] / height
+                sample['proposal_bbox'][i] = proposal_bbox
+
         if 'gt_keypoint' in sample.keys():
             gt_keypoint = sample['gt_keypoint']
 
@@ -2057,6 +2093,12 @@ class BboxXYXY2XYWH(BaseOperator):
         bbox[:, 2:4] = bbox[:, 2:4] - bbox[:, :2]
         bbox[:, :2] = bbox[:, :2] + bbox[:, 2:4] / 2.
         sample['gt_bbox'] = bbox
+        if 'proposal_bbox' in sample:
+            for i in range(len(sample['proposal_bbox'])):
+                proposal = sample['proposal_bbox'][i]
+                proposal[:, 2:4] = proposal[:, 2:4] - proposal[:, :2]
+                proposal[:, :2] = proposal[:, :2] + proposal[:, 2:4] / 2
+                sample['proposal_bbox'][i] = proposal
         return sample
 
 
@@ -2299,6 +2341,11 @@ class Pad(BaseOperator):
             return sample
         if 'gt_bbox' in sample and len(sample['gt_bbox']) > 0:
             sample['gt_bbox'] = self.apply_bbox(sample['gt_bbox'], offsets)
+
+        if 'proposal_bbox' in sample and len(sample['proposal_bbox']) > 0:
+            for i in range(len(sample['proposal_bbox'])):
+                sample['proposal_bbox'][i] = self.apply_bbox(
+                    sample['proposal_bbox'][i], offsets)
 
         if 'gt_poly' in sample and len(sample['gt_poly']) > 0:
             sample['gt_poly'] = self.apply_segm(sample['gt_poly'], offsets,
@@ -2865,6 +2912,12 @@ class RandomShortSideResize(BaseOperator):
         if 'gt_bbox' in sample and len(sample['gt_bbox']) > 0:
             sample['gt_bbox'] = self.apply_bbox(
                 sample['gt_bbox'], [im_scale_x, im_scale_y], target_size)
+
+        if 'proposal_bbox' in sample and len(sample['proposal_bbox']) > 0:
+            for i in range(len(sample['proposal_bbox'])):
+                sample['proposal_bbox'][i] = self.apply_bbox(
+                    sample['proposal_bbox'][i], [im_scale_x, im_scale_y],
+                    target_size)
         # apply polygon
         if 'gt_poly' in sample and len(sample['gt_poly']) > 0:
             sample['gt_poly'] = self.apply_segm(sample['gt_poly'], im.shape[:2],

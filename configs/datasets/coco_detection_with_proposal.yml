@@ -1,0 +1,27 @@
+metric: COCO
+num_classes: 80
+
+TrainDataset:
+  name: COCODataSet
+  image_dir: train2017
+  anno_path: annotations/instances_train2017.json
+  dataset_dir: dataset/coco
+  proposal_file:
+    - 'dino_swin_large_384_4scale_3x_coco_train2017_bbox_slim.json'
+    - 'cascade_rcnn_r50_vd_fpn_ssld_2x_coco_train2017_bbox_slim.json'
+    - 'ppyoloe_plus_crn_x_80e_coco_train2017_bbox_slim.json'
+    - 'ppyolov2_r50vd_dcn_365e_coco_train2017_bbox_slim.json'
+  data_fields: ['image', 'gt_bbox', 'gt_class', 'proposal_bbox', 'proposal_class', 'proposal_score', 'is_crowd']
+  proposal_num: 50
+
+EvalDataset:
+  name: COCODataSet
+  image_dir: val2017
+  anno_path: annotations/instances_val2017.json
+  dataset_dir: dataset/coco
+  allow_empty: true
+
+TestDataset:
+  name: ImageFolder
+  anno_path: annotations/instances_val2017.json # also support txt (like VOC's label_list.txt)
+  dataset_dir: dataset/coco # if set, anno_path will be 'dataset_dir/anno_path'

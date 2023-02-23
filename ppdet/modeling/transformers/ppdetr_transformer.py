@@ -182,7 +182,7 @@ class TransformerDecoder(nn.Layer):
 
 @register
 class PPDETRTransformer(nn.Layer):
-    __shared__ = ['num_classes', 'hidden_dim', 'eval_size']
+    __shared__ = ['num_classes', 'hidden_dim', 'eval_size', 'for_distill']
 
     def __init__(self,
                  num_classes=80,
@@ -203,6 +203,7 @@ class PPDETRTransformer(nn.Layer):
                  box_noise_scale=1.0,
                  learnt_init_query=True,
                  eval_size=None,
+                 for_distill=False,
                  eps=1e-2):
         super(PPDETRTransformer, self).__init__()
         assert position_embed_type in ['sine', 'learned'], \
@@ -269,6 +270,10 @@ class PPDETRTransformer(nn.Layer):
             MLP(hidden_dim, hidden_dim, 4, num_layers=3)
             for _ in range(num_decoder_layers)
         ])
+
+        self.for_distill = for_distill
+        if for_distill:
+            self.distill_pairs = dict()
 
         self._reset_parameters()
 
@@ -396,6 +401,33 @@ class PPDETRTransformer(nn.Layer):
             self.dec_score_head,
             self.query_pos_head,
             attn_mask=attn_mask)
+
+        if self.for_distill:
+            if 'tad_pos_query_dec' in gt_meta:
+                pos_query_dec_t = gt_meta['tad_pos_query_dec']
+                target_query_dec_t = gt_meta['tad_target_query_dec']
+                attn_mask = gt_meta['tad_attn_mask']
+                # decoder
+                out_bboxes_t, out_logits_t = self.decoder(
+                    target_query_dec_t,
+                    pos_query_dec_t,
+                    memory,
+                    spatial_shapes,
+                    level_start_index,
+                    self.dec_bbox_head,
+                    self.dec_score_head,
+                    self.query_pos_head,
+                    attn_mask=attn_mask)
+                self.distill_pairs['tad_out_bboxes'] = out_bboxes_t
+                self.distill_pairs['tad_out_logits'] = out_logits_t
+            else:
+                self.distill_pairs['tad_pos_query_dec'] = init_ref_points_unact
+                self.distill_pairs['tad_target_query_dec'] = target
+                self.distill_pairs['tad_out_bboxes'] = out_bboxes
+                self.distill_pairs['tad_out_logits'] = out_logits
+                self.distill_pairs['tad_dn_meta'] = dn_meta
+                self.distill_pairs['tad_attn_mask'] = attn_mask
+
         return (out_bboxes, out_logits, enc_topk_bboxes, enc_topk_logits,
                 dn_meta)
 

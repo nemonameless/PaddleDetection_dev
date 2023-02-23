@@ -30,6 +30,7 @@ __all__ = [
     'CWDDistillModel',
     'LDDistillModel',
     'PPYOLOEDistillModel',
+    'DETRDistillModel',
 ]
 
 
@@ -348,6 +349,66 @@ class PPYOLOEDistillModel(DistillModel):
             student_loss['det_loss'] = det_total_loss
             student_loss['logits_loss'] = logits_loss
             student_loss['feat_loss'] = feat_loss
+            return student_loss
+        else:
+            return self.student_model(inputs)
+
+
+@register
+class DETRDistillModel(DistillModel):
+    """
+    Build PPYOLOE distill model, only used in PPYOLOE
+    Args:
+        cfg: The student config.
+        slim_cfg: The teacher and distill config.
+    """
+
+    def __init__(self, cfg, slim_cfg):
+        super(DETRDistillModel, self).__init__(cfg=cfg, slim_cfg=slim_cfg)
+        assert self.arch in ['DETR'], 'Unsupported arch: {}'.format(self.arch)
+
+    def forward(self, inputs):
+        if self.training:
+            with paddle.no_grad():
+                teacher_loss = self.teacher_model(inputs)
+
+            distill_pairs_t = self.teacher_model.transformer.distill_pairs
+            pos_query_dec_t, target_query_dec_t, out_bboxes_t, out_logits_t, dn_meta_t, attn_mask_t = [
+                distill_pairs_t.pop(k)
+                for k in [
+                    'tad_pos_query_dec', 'tad_target_query_dec',
+                    'tad_out_bboxes', 'tad_out_logits', 'tad_dn_meta',
+                    'tad_attn_mask'
+                ]
+            ]
+            inputs.update({
+                'tad_pos_query_dec': pos_query_dec_t,
+                'tad_target_query_dec': target_query_dec_t,
+                'tad_dn_meta': dn_meta_t,
+                'tad_attn_mask': attn_mask_t
+            })
+
+            student_loss = self.student_model(inputs)
+            distill_pairs_s = self.student_model.transformer.distill_pairs
+            out_bboxes_s, out_logits_s = [
+                distill_pairs_s.pop(k)
+                for k in ['tad_out_bboxes', 'tad_out_logits']
+            ]
+
+            distill_loss = self.distill_loss(
+                out_bboxes_s,
+                out_logits_s,
+                out_bboxes_t,
+                out_logits_t,
+                inputs['gt_bbox'],
+                inputs['gt_class'],
+                dn_meta=dn_meta_t)
+
+            student_loss.update(distill_loss)
+            det_loss = student_loss.pop('loss')
+            student_loss.update({
+                'loss': paddle.add_n(list(distill_loss.values())) + det_loss
+            })
             return student_loss
         else:
             return self.student_model(inputs)

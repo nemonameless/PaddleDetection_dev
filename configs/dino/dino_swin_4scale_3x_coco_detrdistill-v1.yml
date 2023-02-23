@@ -1,0 +1,37 @@
+_BASE_: [
+  '../datasets/coco_detection.yml',
+  '../runtime.yml',
+  '_base_/optimizer_12e.yml',
+  '_base_/dino_swin.yml',
+  '_base_/yoloe_reader.yml',
+]
+
+weights: output/dino_swin_4scale_3x_coco/model_final
+find_unused_parameters: True
+log_iter: 100
+
+architecture: DETR
+hidden_dim: 256
+use_focal_loss: True
+
+DETR:
+  backbone: SwinTransformer
+  transformer: DINOTransformer
+  detr_head: DINOHead
+  post_process: DETRBBoxPostProcess
+  neck: ~
+
+pretrain_weights: dino_swin_large_384_4scale_3x_coco.pdparams
+for_distill: True
+
+slim: Distill
+slim_method: DETRDistill
+distill_loss: DistillDINOLoss
+
+
+DistillDINOLoss:
+  loss_coeff: {class: 1, bbox: 5, giou: 2}
+  aux_loss: True
+  matcher:
+    name: HungarianMatcher
+    matcher_coeff: {class: 2, bbox: 5, giou: 2}

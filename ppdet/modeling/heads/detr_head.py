@@ -398,6 +398,9 @@ class DINOHead(nn.Layer):
                 out_logits,
                 inputs['gt_bbox'],
                 inputs['gt_class'],
+                proposal_bbox=inputs.get('proposal_bbox', None),
+                proposal_class=inputs.get('proposal_class', None),
+                proposal_score=inputs.get('proposal_score', None),
                 dn_out_bboxes=dn_out_bboxes,
                 dn_out_logits=dn_out_logits,
                 dn_meta=dn_meta)
