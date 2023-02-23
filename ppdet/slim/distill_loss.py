@@ -473,113 +473,6 @@ class CWDFeatureLoss(nn.Layer):
         return self.loss_weight * loss / (C * N)
 
 
-from IPython import embed
-from ..modeling.transformers import bbox_cxcywh_to_xyxy
-from ..modeling.bbox_utils import bbox_iou
-@register
-class DistillDINOLoss(nn.Layer):
-    def __init__(
-            self,
-            loss_weight={'logits': 1.0,
-                         'feat': 20.0},
-            logits_distill=False,
-            feat_distill=True,
-            feat_distiller='aafd',
-            student_channels=[512, 1024, 2048], # r50
-            teacher_channels=[384, 768, 1536]): # swin-L-384
-        super(DistillDINOLoss, self).__init__()
-        self.loss_weight_logits = loss_weight['logits']
-        self.loss_weight_feat = loss_weight['feat']
-        self.logits_distill = logits_distill
-        self.feat_distill = feat_distill
-
-        self.mse_loss = nn.MSELoss(reduction='none')
-        # if logits_distill and self.loss_weight_logits > 0:
-
-        # if feat_distill and self.loss_weight_feat > 0:
-        #     assert feat_distiller in ['aafd', 'mimic']
-        #     if feat_distiller == 'aafd':
-        #         self.distill_feat_loss = AttnAgnosticFeatureLoss()
-
-    def _quality_score(self, logits, gt_bbox, pred_bbox):
-        score = F.softmax(logits)
-        iou_score = bbox_iou(
-            bbox_cxcywh_to_xyxy(gt_bbox).split(4, -1),
-            bbox_cxcywh_to_xyxy(pred_bbox).split(4, -1))
-        return score * iou_score
-
-    def forward(self, teacher_model, student_model):
-        teacher_distill_pairs = teacher_model.transformer.distill_pairs
-        student_distill_pairs = student_model.transformer.distill_pairs
-
-        teacher_loss_distill_pairs = teacher_model.detr_head.loss.distill_pairs
-
-        # if self.logits_distill and self.loss_weight_logits > 0:
-        logits_loss = paddle.zeros([1])
-        gamma = 0.5
-
-        if self.feat_distill and self.loss_weight_feat > 0:
-            inputs = student_model.inputs
-            assert 'gt_bbox' in inputs
-
-            # num_max_boxes = max([len(s) for s in inputs['gt_bbox']])
-            # inputs['pad_gt_bbox'] = []
-            # for gt_bbox in inputs['gt_bbox']:
-            #     if num_max_boxes == 0:
-            #         continue
-            #     num_gt = len(gt_bbox)
-            #     pad_gt_bbox = paddle.zeros((num_max_boxes, 4), 'float32')
-            #     if num_gt > 0:
-            #         pad_gt_bbox[:num_gt] = gt_bbox
-            #     inputs['pad_gt_bbox'].append(pad_gt_bbox)
-            # gt_bboxes = paddle.stack(inputs['pad_gt_bbox'])
-            # print('gt_bboxes.shape ', gt_bboxes.shape)
-
-            stu_feats = student_distill_pairs['feat_flatten']
-
-            tea_feats = teacher_distill_pairs['feat_flatten']
-            tea_proj_queries = teacher_distill_pairs['proj_queries']
-            tea_enc_outputs_logits = teacher_distill_pairs['enc_outputs_logits']
-            tea_enc_outputs_bboxes = teacher_distill_pairs['enc_outputs_bboxes']
-            spatial_shapes = teacher_distill_pairs['spatial_shapes']
-            teacher_loss_distill_pairs['match_indices']
-
-            idx = 0
-            feat_loss_list = []
-            for lvl, (h, w) in enumerate(spatial_shapes):
-                stu_feat_ = stu_feats[:, idx:idx + h * w, :]
-                tea_feat_ = tea_feats[:, idx:idx + h * w, :]
-                tea_query_ = tea_proj_queries[:, idx:idx + h * w, :]
-                _, d, l = stu_feat_.shape
-                soft_mask = F.sigmoid(tea_query_ * tea_feat_)
-                #loss_mimic = soft_mask * self.mse_loss(tea_feat_, stu_feat_) # no need adaptation/align layer
-                loss_mimic = self.mse_loss(paddle.multiply(soft_mask, tea_feat_), paddle.multiply(soft_mask, stu_feat_)) # no need adaptation/align layer
-
-                # tea_logits = tea_enc_outputs_logits[:, idx:idx + h * w, :]
-                # tea_bboxes = tea_enc_outputs_bboxes[:, idx:idx + h * w, :]
-                # print('tea_enc_outputs_bboxes ', tea_enc_outputs_bboxes.shape)
-                # #quality_score = self._quality_score(tea_logits, inputs['gt_bbox'], tea_bboxes)
-                # score = F.softmax(tea_logits, 2).max(-1) # [1, 13500]
-                # iou_score = bbox_iou(
-                #     bbox_cxcywh_to_xyxy(gt_bboxes).split(4, -1),
-                #     bbox_cxcywh_to_xyxy(tea_bboxes).split(4, -1))
-                # quality_score = score.pow(gamma) * iou_score.squeeze(-1).pow(1 - gamma)
-                # feat_loss_ = quality_score.unsqueeze(-1) * loss_mimic
-
-                feat_loss_ = loss_mimic
-                feat_loss_ = feat_loss_.sum() / (d * l)
-                feat_loss_list.append(feat_loss_)
-                idx += l
-            feat_loss = paddle.add_n(feat_loss_list)
-            # feat_loss = self.distill_feat_loss(stu_feats, tea_feats, inputs)
-        else:
-            feat_loss = paddle.zeros([1])
-
-        student_model.transformer.distill_pairs.clear()
-        teacher_model.transformer.distill_pairs.clear()
-        return logits_loss * self.loss_weight_logits, feat_loss * self.loss_weight_feat
-
-
 @register
 class DistillPPDINOLoss(nn.Layer):
     def __init__(
@@ -602,15 +495,6 @@ class DistillPPDINOLoss(nn.Layer):
 
         # if feat_distill and self.loss_weight_feat > 0:
         #     assert feat_distiller in ['aafd', 'mimic']
-        #     if feat_distiller == 'aafd':
-        #         self.distill_feat_loss = AttnAgnosticFeatureLoss()
-
-    def _quality_score(self, logits, gt_bbox, pred_bbox):
-        score = F.softmax(logits)
-        iou_score = bbox_iou(
-            bbox_cxcywh_to_xyxy(gt_bbox).split(4, -1),
-            bbox_cxcywh_to_xyxy(pred_bbox).split(4, -1))
-        return score * iou_score
 
     def forward(self, teacher_model, student_model):
         teacher_distill_pairs = teacher_model.transformer.distill_pairs
@@ -625,57 +509,32 @@ class DistillPPDINOLoss(nn.Layer):
         if self.feat_distill and self.loss_weight_feat > 0:
             inputs = student_model.inputs
             assert 'gt_bbox' in inputs
+            stu_feats = student_distill_pairs['feat_flatten'] # [bs, hw, d]
+            tea_feats = teacher_distill_pairs['feat_flatten'] # [bs, hw, d]
+            tea_proj_queries = teacher_distill_pairs['proj_queries'] # [bs, M, d]
+            _, hw, d = stu_feats.shape
+            _, M, d = tea_proj_queries.shape
 
-            # num_max_boxes = max([len(s) for s in inputs['gt_bbox']])
-            # inputs['pad_gt_bbox'] = []
-            # for gt_bbox in inputs['gt_bbox']:
-            #     if num_max_boxes == 0:
-            #         continue
-            #     num_gt = len(gt_bbox)
-            #     pad_gt_bbox = paddle.zeros((num_max_boxes, 4), 'float32')
-            #     if num_gt > 0:
-            #         pad_gt_bbox[:num_gt] = gt_bbox
-            #     inputs['pad_gt_bbox'].append(pad_gt_bbox)
-            # gt_bboxes = paddle.stack(inputs['pad_gt_bbox'])
-            # print('gt_bboxes.shape ', gt_bboxes.shape)
+            soft_mask = F.sigmoid(paddle.matmul(tea_proj_queries, tea_feats.transpose([0, 2, 1])))
+            # soft_mask.shape [2, 900, 8500] # [bs, M, hw]
+            # tea_feats.shape [2, 8500, 256] # [bs, hw, d]
+            loss_mimic = self.mse_loss(paddle.matmul(soft_mask, tea_feats), paddle.matmul(soft_mask, stu_feats)) # [2, 900, 256]
 
-            stu_feats = student_distill_pairs['feat_flatten']
+            tea_match_indices = teacher_loss_distill_pairs['match_indices']
+            tea_src_logit = teacher_loss_distill_pairs['src_logit'] # [5, 80]
+            scores = F.softmax(tea_src_logit).max(-1).unsqueeze(-1)
 
-            tea_feats = teacher_distill_pairs['feat_flatten']
-            tea_proj_queries = teacher_distill_pairs['proj_queries']
-            tea_enc_outputs_logits = teacher_distill_pairs['enc_outputs_logits']
-            tea_enc_outputs_bboxes = teacher_distill_pairs['enc_outputs_bboxes']
-            spatial_shapes = teacher_distill_pairs['spatial_shapes']
-            teacher_loss_distill_pairs['match_indices']
+            tea_iou_score = teacher_loss_distill_pairs['iou_score'] # [5, 1]
+            q_score = scores.pow(gamma) * tea_iou_score.pow(1 - gamma)
 
-            idx = 0
-            feat_loss_list = []
-            for lvl, (h, w) in enumerate(spatial_shapes):
-                stu_feat_ = stu_feats[:, idx:idx + h * w, :]
-                tea_feat_ = tea_feats[:, idx:idx + h * w, :]
-                tea_query_ = tea_proj_queries[:, idx:idx + h * w, :]
-                _, d, l = stu_feat_.shape
-                soft_mask = F.sigmoid(tea_query_ * tea_feat_)
-                #loss_mimic = soft_mask * self.mse_loss(tea_feat_, stu_feat_) # no need adaptation/align layer
-                loss_mimic = self.mse_loss(paddle.multiply(soft_mask, tea_feat_), paddle.multiply(soft_mask, stu_feat_)) # no need adaptation/align layer
+            loss_mimic_valid = paddle.concat([
+                paddle.gather(
+                    t, I, axis=0) if len(I) > 0 else paddle.zeros([0, t.shape[-1]])
+                for t, (I, _) in zip(loss_mimic, tea_match_indices)
+            ]) # [5, 256]
 
-                # tea_logits = tea_enc_outputs_logits[:, idx:idx + h * w, :]
-                # tea_bboxes = tea_enc_outputs_bboxes[:, idx:idx + h * w, :]
-                # print('tea_enc_outputs_bboxes ', tea_enc_outputs_bboxes.shape)
-                # #quality_score = self._quality_score(tea_logits, inputs['gt_bbox'], tea_bboxes)
-                # score = F.softmax(tea_logits, 2).max(-1) # [1, 13500]
-                # iou_score = bbox_iou(
-                #     bbox_cxcywh_to_xyxy(gt_bboxes).split(4, -1),
-                #     bbox_cxcywh_to_xyxy(tea_bboxes).split(4, -1))
-                # quality_score = score.pow(gamma) * iou_score.squeeze(-1).pow(1 - gamma)
-                # feat_loss_ = quality_score.unsqueeze(-1) * loss_mimic
-
-                feat_loss_ = loss_mimic
-                feat_loss_ = feat_loss_.sum() / (d * l)
-                feat_loss_list.append(feat_loss_)
-                idx += l
-            feat_loss = paddle.add_n(feat_loss_list)
-            # feat_loss = self.distill_feat_loss(stu_feats, tea_feats, inputs)
+            feat_loss = q_score * loss_mimic_valid
+            feat_loss = feat_loss.sum() / (d * hw * M)
         else:
             feat_loss = paddle.zeros([1])
 

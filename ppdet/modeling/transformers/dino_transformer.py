@@ -527,8 +527,8 @@ class DINOTransformer(nn.Layer):
                 lvl_pos_embed_flatten, valid_ratios)
 
     def forward(self, feats, pad_mask=None, gt_meta=None):
-        if self.for_distill:
-            self.distill_pairs['body_feats'] = feats
+        # if self.for_distill:
+        #     self.distill_pairs['body_feats'] = feats
         # feats: swin [1, 384, 100, 150] [1, 768, 50, 75] [1, 1536, 25, 38]
         # feats: r50  [1, 512, 100, 150] [1, 1024, 50, 75] [1, 2048, 25, 38]
         # input projection and embedding
@@ -548,7 +548,7 @@ class DINOTransformer(nn.Layer):
         # memory.shape [1, 17971, 256]
 
         # prepare denoising training
-        is_teacher = gt_meta['is_teacher']
+        is_teacher = gt_meta.get('is_teacher', False)
         if self.training and not is_teacher:
             denoising_class, denoising_bbox_unact, attn_mask, dn_meta = \
                 get_contrastive_denoising_training_group(gt_meta,
@@ -572,6 +572,9 @@ class DINOTransformer(nn.Layer):
             denoising_bbox_unact)
         # [2, 1100, 256] [2, 1100, 4] [2, 900, 4] [2, 900, 80] train
         # [2, 900, 256] [2, 900, 4] [2, 900, 4] [2, 900, 80] val
+
+        if self.for_distill:
+            self.distill_pairs['proj_queries'] = target
 
         # decoder
         inter_feats, inter_ref_bboxes_unact = self.decoder(
@@ -665,11 +668,11 @@ class DINOTransformer(nn.Layer):
         _, topk_ind = paddle.topk(
             enc_outputs_class.max(-1), self.num_queries, axis=1)
 
-        if self.for_distill:
-            self.distill_pairs['proj_queries'] = output_memory
-            self.distill_pairs['topk_ind'] = topk_ind
-            self.distill_pairs['enc_outputs_logits'] = enc_outputs_class
-            self.distill_pairs['enc_outputs_bboxes'] = F.sigmoid(enc_outputs_coord_unact)
+        # if self.for_distill:
+        #     self.distill_pairs['proj_queries'] = output_memory
+        #     self.distill_pairs['topk_ind'] = topk_ind
+        #     self.distill_pairs['enc_outputs_logits'] = enc_outputs_class
+        #     self.distill_pairs['enc_outputs_bboxes'] = F.sigmoid(enc_outputs_coord_unact)
 
         # extract region proposal boxes
         batch_ind = paddle.arange(end=bs, dtype=topk_ind.dtype)

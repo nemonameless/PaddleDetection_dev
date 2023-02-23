@@ -369,10 +369,9 @@ class DETRLoss(nn.Layer):
             else:
                 iou_score = None
             self.distill_pairs['match_indices' + postfix] = match_indices
-            self.distill_pairs['pred_logits' + postfix] = logits[-1] # [2, 900, 80]
-            self.distill_pairs['pred_boxes' + postfix] = boxes[-1] # [2, 900, 4]
+            # self.distill_pairs['target_bbox' + postfix] = target_bbox
             self.distill_pairs['src_logit' + postfix] = src_logit
-            self.distill_pairs['src_bbox' + postfix] = src_bbox
+            # self.distill_pairs['src_bbox' + postfix] = src_bbox
             self.distill_pairs['iou_score' + postfix] = iou_score
 
         total_loss = dict()

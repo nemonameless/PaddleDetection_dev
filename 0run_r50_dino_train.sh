@@ -6,7 +6,7 @@ log_dir=log_dir/${job_name}
 
 # 1. training
 #CUDA_VISIBLE_DEVICES=5 python3.7 tools/train.py -c ${config} --eval --amp #-r ${weights}
-python3.7 -m paddle.distributed.launch --log_dir=${log_dir} --gpus 2,3,4,5,6,7 tools/train.py -c ${config} --eval #--amp
+python3.7 -m paddle.distributed.launch --log_dir=${log_dir} --gpus 0,1,2,3,4,5,6,7 tools/train.py -c ${config} --eval #--amp
 
 # 2. eval
 #CUDA_VISIBLE_DEVICES=0 python3.7 tools/eval.py -c ${config} -o weights=https://paddledet.bj.bcebos.com/models/${job_name}.pdparams

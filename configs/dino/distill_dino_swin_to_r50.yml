@@ -46,10 +46,9 @@ DINOHead:
 
 slim: Distill
 slim_method: DINODistill
-distill_loss: DistillDINOLoss
+distill_loss: DistillPPDINOLoss
 
-DistillDINOLoss: # swin-L-384 -> r50
-  loss_weight: {'logits': 1.0, 'feat': 5.0}
-  #loss_weight: {'logits': 1.0, 'feat': 20.0}
+DistillPPDINOLoss: # swin-L-384 -> r50
+  loss_weight: {'logits': 1.0, 'feat': 20.0}
   logits_distill: False
   feat_distill: True

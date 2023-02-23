@@ -21,8 +21,8 @@ TrainReader:
     - RandomCrop: {prob: 0.8}
     - RandomFlip: {}
   batch_transforms:
-    #- BatchRandomResize: {target_size: [640], random_size: True, random_interp: True, keep_ratio: False}
-    - BatchRandomResize: {target_size: [480, 512, 544, 576, 608, 640, 640, 640, 672, 704, 736, 768, 800], random_size: True, random_interp: True, keep_ratio: False}
+    - BatchRandomResize: {target_size: [640], random_size: True, random_interp: True, keep_ratio: False}
+    #- BatchRandomResize: {target_size: [480, 512, 544, 576, 608, 640, 640, 640, 672, 704, 736, 768, 800], random_size: True, random_interp: True, keep_ratio: False}
     - NormalizeImage: {mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225], is_scale: True}
     - NormalizeBox: {}
     - BboxXYXY2XYWH: {}
@@ -91,7 +91,7 @@ YOLOCSPPAN:
   proj_dim: [512, 512, 512]
 
 PPDETRTransformer:
-  num_queries: 900 # 300
+  num_queries: 300 #900 # 300
   position_embed_type: sine
   num_levels: 4
   nhead: 8
