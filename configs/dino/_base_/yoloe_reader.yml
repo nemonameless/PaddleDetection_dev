@@ -1,7 +1,8 @@
 worker_num: 2
 TrainReader:
   sample_transforms:
-    - Decode: {}
+    #- Decode: {}
+    - DecodeCache: {cache_root: 'dataset/coco/cache/buffer'}
     - RandomDistort: {prob: 0.8}
     - RandomExpand: {fill_value: [0., 0., 0.]}
     - RandomCrop: {prob: 0.8}
