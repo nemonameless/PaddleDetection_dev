@@ -76,7 +76,7 @@ MODEL_cfg = {
         depths=[2, 2, 18, 2],
         num_heads=[6, 12, 24, 48],
         window_size=12,
-        pretrained='https://bj.bcebos.com/v1/paddledet/models/pretrained/swin_large_patch4_window12_384_22kto1k_pretrained.pdparams',
+        pretrained=None,  #'https://bj.bcebos.com/v1/paddledet/models/pretrained/swin_large_patch4_window12_384_22kto1k_pretrained.pdparams',
     ),
 }
 
@@ -191,8 +191,8 @@ class WindowAttention(nn.Layer):
         relative_coords[:, :, 1] += self.window_size[1] - 1
         relative_coords[:, :, 0] *= 2 * self.window_size[1] - 1
         self.relative_position_index = relative_coords.sum(-1)  # Wh*Ww, Wh*Ww
-        self.register_buffer("relative_position_index",
-                             self.relative_position_index)
+        # self.register_buffer("relative_position_index",
+        #                      self.relative_position_index)
 
         self.qkv = nn.Linear(dim, dim * 3, bias_attr=qkv_bias)
         self.attn_drop = nn.Dropout(attn_drop)
@@ -747,8 +747,7 @@ class SwinTransformer(nn.Layer):
                 out = x_out.reshape((-1, H, W, self.num_features[i])).transpose(
                     (0, 3, 1, 2))
                 outs.append(out)
-
-        return tuple(outs)
+        return outs
 
     @property
     def out_shape(self):

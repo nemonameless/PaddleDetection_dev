@@ -950,18 +950,20 @@ class Gt2SparseTarget(BaseOperator):
 @register_op
 class PadMaskBatch(BaseOperator):
     """
-    Pad a batch of samples so they can be divisible by a stride.
+    Pad a batch of samples so that they can be divisible by a stride.
     The layout of each image should be 'CHW'.
     Args:
         pad_to_stride (int): If `pad_to_stride > 0`, pad zeros to ensure
             height and width is divisible by `pad_to_stride`.
+        pad_size (None|list|tuple):
         return_pad_mask (bool): If `return_pad_mask = True`, return
             `pad_mask` for transformer.
     """
 
-    def __init__(self, pad_to_stride=0, return_pad_mask=False):
+    def __init__(self, pad_to_stride=0, pad_size=None, return_pad_mask=True):
         super(PadMaskBatch, self).__init__()
         self.pad_to_stride = pad_to_stride
+        self.pad_size = pad_size
         self.return_pad_mask = return_pad_mask
 
     def __call__(self, samples, context=None):
@@ -978,13 +980,15 @@ class PadMaskBatch(BaseOperator):
                 np.ceil(max_shape[1] / coarsest_stride) * coarsest_stride)
             max_shape[2] = int(
                 np.ceil(max_shape[2] / coarsest_stride) * coarsest_stride)
+        if self.pad_size:
+            max_shape = [max_shape[0], ] + self.pad_size
 
         for data in samples:
             im = data['image']
             im_c, im_h, im_w = im.shape[:]
             padding_im = np.zeros(
                 (im_c, max_shape[1], max_shape[2]), dtype=np.float32)
-            padding_im[:, :im_h, :im_w] = im
+            padding_im[:, :im_h, :im_w] = im.astype(np.float32)
             data['image'] = padding_im
             if 'semantic' in data and data['semantic'] is not None:
                 semantic = data['semantic']

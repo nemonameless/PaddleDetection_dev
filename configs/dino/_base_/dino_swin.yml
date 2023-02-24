@@ -5,6 +5,7 @@ use_focal_loss: True
 
 DETR:
   backbone: SwinTransformer
+  neck: ~ # None
   transformer: DINOTransformer
   detr_head: DINOHead
   post_process: DETRBBoxPostProcess

@@ -21,6 +21,7 @@ from ppdet.modeling.ops import get_act_fn
 from ..backbones.darknet import ConvBNLayer
 from ..shape_spec import ShapeSpec
 from ..backbones.csp_darknet import BaseConv, DWConv, CSPLayer
+from ..necks.custom_pan import TransformerEncoderLayer, TransformerEncoder
 
 __all__ = ['YOLOv3FPN', 'PPYOLOFPN', 'PPYOLOTinyFPN', 'PPYOLOPAN', 'YOLOCSPPAN']
 
@@ -1001,13 +1002,44 @@ class YOLOCSPPAN(nn.Layer):
     def __init__(self,
                  depth_mult=1.0,
                  in_channels=[256, 512, 1024],
+                 proj_dim=None,
                  depthwise=False,
+                 use_trans=False,
+                 attn_lvl=[32],
+                 nhead=8,
+                 num_layers=1,
+                 dim_feedforward=2048,
+                 dropout=0.1,
+                 activation='gelu',
+                 attn_dropout=None,
+                 act_dropout=None,
+                 normalize_before=False,
                  data_format='NCHW',
                  act='silu',
-                 trt=False):
+                 trt=False,
+                 eval_size=[640, 640],
+                 proj_use_conv=False):
         super(YOLOCSPPAN, self).__init__()
+        self.proj_dim = proj_dim
+        self.eval_size = eval_size
+        self.attn_lvl = attn_lvl
+        if self.proj_dim is not None:
+            assert len(proj_dim) == len(in_channels)
+            # proj channels
+            self.neck_input_proj = nn.LayerList()
+            for idx in range(len(in_channels)):
+                if proj_use_conv:
+                    self.neck_input_proj.append(
+                        nn.Conv2D(int(in_channels[idx]), proj_dim[idx], 1, 1))
+                else:
+                    self.neck_input_proj.append(
+                        BaseConv(
+                            int(in_channels[idx]), proj_dim[idx], 1, 1,
+                            act=act))
+            in_channels = proj_dim
         self.in_channels = in_channels
         self._out_channels = in_channels
+        self.hidden_dim = in_channels[-1]
         Conv = DWConv if depthwise else BaseConv
 
         self.data_format = data_format
@@ -1015,6 +1047,43 @@ class YOLOCSPPAN(nn.Layer):
             act, trt=trt) if act is None or isinstance(act,
                                                        (str, dict)) else act
         self.upsample = nn.Upsample(scale_factor=2, mode="nearest")
+
+        # add transformer
+        self.use_trans = use_trans
+        if use_trans:
+            if eval_size is not None:
+                self.pos_embed = []
+                for stride in attn_lvl:
+                    if stride == 8:
+                        self.pos_embed_p3 = self.build_2d_sincos_position_embedding(
+                            eval_size[1] // stride,
+                            eval_size[0] // stride,
+                            embed_dim=self.hidden_dim)
+                    elif stride == 16:
+                        self.pos_embed_p4 = self.build_2d_sincos_position_embedding(
+                            eval_size[1] // stride,
+                            eval_size[0] // stride,
+                            embed_dim=self.hidden_dim)
+                    elif stride == 32:
+                        self.pos_embed_p5 = self.build_2d_sincos_position_embedding(
+                            eval_size[1] // stride,
+                            eval_size[0] // stride,
+                            embed_dim=self.hidden_dim)
+                    else:
+                        raise ValueError("{} is not support yet!".format(
+                            stride))
+            else:
+                self.pos_embed = None
+
+            encoder_layer = TransformerEncoderLayer(
+                self.hidden_dim, nhead, dim_feedforward, dropout, activation,
+                attn_dropout, act_dropout, normalize_before)
+            encoder_norm = nn.LayerNorm(
+                self.hidden_dim) if normalize_before else None
+            self.encoder = nn.LayerList([
+                TransformerEncoder(encoder_layer, num_layers, encoder_norm)
+                for _ in range(len(attn_lvl))
+            ])
 
         # top-down fpn
         self.lateral_convs = nn.LayerList()
@@ -1056,8 +1125,60 @@ class YOLOCSPPAN(nn.Layer):
                     depthwise=depthwise,
                     act=act))
 
+    def build_2d_sincos_position_embedding(
+            self,
+            w,
+            h,
+            embed_dim=1024,
+            temperature=10000., ):
+        grid_w = paddle.arange(int(w), dtype=paddle.float32)
+        grid_h = paddle.arange(int(h), dtype=paddle.float32)
+        grid_w, grid_h = paddle.meshgrid(grid_w, grid_h)
+        assert embed_dim % 4 == 0, 'Embed dimension must be divisible by 4 for 2D sin-cos position embedding'
+        pos_dim = embed_dim // 4
+        omega = paddle.arange(pos_dim, dtype=paddle.float32) / pos_dim
+        omega = 1. / (temperature**omega)
+
+        out_w = grid_w.flatten()[..., None] @omega[None]
+        out_h = grid_h.flatten()[..., None] @omega[None]
+
+        pos_emb = paddle.concat(
+            [
+                paddle.sin(out_w), paddle.cos(out_w), paddle.sin(out_h),
+                paddle.cos(out_h)
+            ],
+            axis=1)[None, :, :]
+
+        return pos_emb
+
     def forward(self, feats, for_mot=False):
         assert len(feats) == len(self.in_channels)
+        if self.proj_dim is not None:
+            for idx in range(len(self.proj_dim)):
+                feats[idx] = self.neck_input_proj[idx](feats[idx])
+
+        if self.use_trans:
+            for idx, stride in enumerate(self.attn_lvl):
+                last_feat = feats[-idx - 1]
+                n, c, h, w = last_feat.shape
+
+                # flatten [B, C, H, W] to [B, HxW, C]
+                src_flatten = last_feat.flatten(2).transpose([0, 2, 1])
+                if self.eval_size is not None and not self.training:
+                    if stride == 8:
+                        pos_embed = self.pos_embed_p3
+                    elif stride == 16:
+                        pos_embed = self.pos_embed_p4
+                    else:
+                        pos_embed = self.pos_embed_p5
+                else:
+                    pos_embed = self.build_2d_sincos_position_embedding(
+                        w=w, h=h, embed_dim=self.hidden_dim)
+                memory = self.encoder[-idx - 1](src_flatten,
+                                                pos_embed=pos_embed)
+                last_feat_encode = memory.transpose([0, 2, 1]).reshape(
+                    [n, c, h, w])
+                feats[-idx - 1] = last_feat_encode
 
         # top-down fpn
         inner_outs = [feats[-1]]

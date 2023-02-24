@@ -1,0 +1,12 @@
+_BASE_: [
+  '../datasets/coco_detection.yml',
+  '../runtime.yml',
+  '_base_/optimizer_5x.yml',
+  '_base_/dino_r50vd_pan.yml',
+  '_base_/yoloe_reader.yml',
+]
+
+weights: output/dino_r50vd_pan_3_0_6_5x_coco/model_final
+find_unused_parameters: True
+log_iter: 200
+snapshot_epoch: 5
