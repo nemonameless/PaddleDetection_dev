@@ -3,6 +3,7 @@ model_type=dino
 #job_name=ppdino_r50vd_pan_3_0_6_5x_coco
 #job_name=dino_swin_large_384_4scale_3x_coco
 job_name=ppdino_swin_large_384_4scale_3x_coco
+job_name=ppdino_focalnet_4scale_3x_coco
 
 config=configs/${model_type}/${job_name}.yml
 log_dir=log_dir/${job_name}
