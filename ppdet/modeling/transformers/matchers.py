@@ -130,3 +130,79 @@ class HungarianMatcher(nn.Layer):
         return [(paddle.to_tensor(
             i, dtype=paddle.int64), paddle.to_tensor(
                 j, dtype=paddle.int64)) for i, j in indices]
+
+
+from IPython import embed
+class BiMatcher(nn.Layer):
+
+    def __init__(self,
+                 matcher_coeff={'class': 1,
+                                'bbox': 5,
+                                'giou': 2},
+                 use_focal_loss=False,
+                 use_pos_only=False,
+                 alpha=0.25,
+                 gamma=2.0):
+        r"""
+        Args:
+            matcher_coeff (dict): The coefficient of hungarian matcher cost.
+        """
+        super(BiMatcher, self).__init__()
+        self.matcher_coeff = matcher_coeff
+        self.use_focal_loss = use_focal_loss
+        self.use_pos_only = use_pos_only
+        self.alpha = alpha
+        self.gamma = gamma
+
+        self.giou_loss = GIoULoss()
+
+    def forward(self, boxes, logits, boxes_s, logits_s):
+        r"""
+        Args:
+            boxes (Tensor): [b, query, 4]
+            logits (Tensor): [b, query, num_classes]
+            gt_bbox (List(Tensor)): list[[n, 4]]
+            gt_class (List(Tensor)): list[[n, 1]]
+
+        Returns:
+            A list of size batch_size, containing tuples of (index_i, index_j) where:
+                - index_i is the indices of the selected predictions (in order)
+                - index_j is the indices of the corresponding selected targets (in order)
+            For each batch element, it holds:
+                len(index_i) = len(index_j) = min(num_queries, num_target_boxes)
+        """
+        bs, num_queries = boxes.shape[:2]
+
+        # We flatten to compute the cost matrices in a batch
+        # [batch_size * num_queries, num_classes]
+        out_prob = F.sigmoid(logits.flatten(0, 1)) if self.use_focal_loss else F.softmax(logits.flatten(0, 1))
+        # [batch_size * num_queries, 4]
+        out_bbox = boxes.flatten(0, 1)
+
+        out_bbox_s = boxes_s.flatten(0, 1)
+
+        # Compute the L1 cost between boxes
+        cost_bbox = (
+            out_bbox.unsqueeze(1) - out_bbox_s.unsqueeze(0)).abs().sum(-1)
+
+        # Compute the giou cost betwen boxes
+        cost_giou = self.giou_loss(
+            bbox_cxcywh_to_xyxy(out_bbox.unsqueeze(1)),
+            bbox_cxcywh_to_xyxy(out_bbox_s.unsqueeze(0))).squeeze(-1)
+
+        # Final cost matrix
+        C = self.matcher_coeff['bbox'] * cost_bbox + self.matcher_coeff['giou'] * cost_giou
+        C = C.reshape([bs, num_queries, -1])
+        C = [a.squeeze(0) for a in C.chunk(bs)]
+
+        # sizes = [a.shape[0] for a in gt_bbox]
+        bs, num_queries_N = boxes_s.shape[:2]
+        sizes = [num_queries_N for i in range(bs)]
+        indices = [
+            linear_sum_assignment(c.split(sizes, -1)[i].numpy())
+            for i, c in enumerate(C)
+        ]
+
+        return [(paddle.to_tensor(
+            i, dtype=paddle.int64), paddle.to_tensor(
+                j, dtype=paddle.int64)) for i, j in indices]

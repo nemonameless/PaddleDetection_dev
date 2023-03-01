@@ -373,11 +373,11 @@ class PPDINODistillModel(DistillModel):
                 inputs['is_teacher'] = True
                 teacher_loss = self.teacher_model(inputs)
 
-            if hasattr(self.teacher_model.transformer, "out_bboxes"):
-                self.student_model.transformer.out_bboxes, self.student_model.transformer.out_logits = \
-                    self.teacher_model.transformer.out_bboxes, self.teacher_model.transformer.out_logits
-                delattr(self.teacher_model.transformer, "out_bboxes")
-                delattr(self.teacher_model.transformer, "out_logits")
+            # if hasattr(self.teacher_model.transformer, "out_bboxes"):
+            #     self.student_model.transformer.out_bboxes, self.student_model.transformer.out_logits = \
+            #         self.teacher_model.transformer.out_bboxes, self.teacher_model.transformer.out_logits
+            #     delattr(self.teacher_model.transformer, "out_bboxes")
+            #     delattr(self.teacher_model.transformer, "out_logits")
 
             inputs['is_teacher'] = False
             student_loss = self.student_model(inputs)
