@@ -156,7 +156,7 @@ class BiMatcher(nn.Layer):
 
         self.giou_loss = GIoULoss()
 
-    def forward(self, boxes, logits, boxes_s, logits_s):
+    def forward(self, boxes, boxes_s, logits=None, logits_s=None):
         r"""
         Args:
             boxes (Tensor): [b, query, 4]
@@ -175,7 +175,6 @@ class BiMatcher(nn.Layer):
 
         # We flatten to compute the cost matrices in a batch
         # [batch_size * num_queries, num_classes]
-        out_prob = F.sigmoid(logits.flatten(0, 1)) if self.use_focal_loss else F.softmax(logits.flatten(0, 1))
         # [batch_size * num_queries, 4]
         out_bbox = boxes.flatten(0, 1)
 

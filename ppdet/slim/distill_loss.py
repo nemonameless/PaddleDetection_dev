@@ -538,8 +538,7 @@ class DistillPPDINOLoss(nn.Layer):
             beta, yy = 1, 1
             for i in range(K):
                 match_indices = self.bimatcher( # [2, 300, 4]
-                    tea_bboxes[i].detach(), tea_logits[i].detach(),
-                    stu_bboxes[i].detach(), stu_logits[i].detach())
+                    tea_bboxes[i].detach(), stu_bboxes[i].detach(), tea_logits[i].detach(), stu_logits[i].detach())
 
                 tea_bboxes_match, stu_bboxes_match = self._get_from_matching(
                     tea_bboxes[-1].detach(), stu_bboxes[i], match_indices)
@@ -580,29 +579,50 @@ class DistillPPDINOLoss(nn.Layer):
             stu_feats = student_distill_pairs['feat_flatten'] # [bs, hw, d]
             tea_feats = teacher_distill_pairs['feat_flatten'] # [bs, hw, d]
             tea_proj_queries = teacher_distill_pairs['proj_queries'] # [bs, M, d]
-            _, hw, d = stu_feats.shape
-            _, M, d = tea_proj_queries.shape
+            bs, hw, d = stu_feats.shape
+            bs, M, d = tea_proj_queries.shape
 
             soft_mask = F.sigmoid(paddle.matmul(tea_proj_queries, tea_feats.transpose([0, 2, 1])))
             # soft_mask.shape [2, 300, 8500] # [bs, M, hw]
             # tea_feats.shape [2, 8500, 256] # [bs, hw, d]
             loss_mimic = self.mse_loss(paddle.matmul(soft_mask, tea_feats), paddle.matmul(soft_mask, stu_feats)) # [2, 300, 256]
 
-            tea_match_indices = teacher_loss_distill_pairs['match_indices']
-            tea_src_logit = teacher_loss_distill_pairs['src_logit'] # [5, 80]
-            scores = F.softmax(tea_src_logit).max(-1).unsqueeze(-1)
+            tea_bboxes = teacher_distill_pairs['out_bboxes_kd'][-1]
+            tea_logits = teacher_distill_pairs['out_logits_kd'][-1]
+            stu_bboxes = student_distill_pairs['out_bboxes_kd'][-1]
+            stu_logits = student_distill_pairs['out_logits_kd'][-1]
+            match_indices = self.bimatcher( # [2, 300, 4]
+                tea_bboxes.detach(), stu_bboxes.detach())
+            tea_bboxes_match, stu_bboxes_match = self._get_from_matching(
+                tea_bboxes.detach(), stu_bboxes.detach(), match_indices)
+            tea_logits_match, stu_logits_match = self._get_from_matching(
+                tea_logits.detach(), stu_logits, match_indices)
 
-            tea_iou_score = teacher_loss_distill_pairs['iou_score'] # [5, 1]
-            q_score = scores.pow(gamma) * tea_iou_score.pow(1 - gamma)
+            scores = F.softmax(tea_logits_match).max(-1).unsqueeze(-1)
+            tea_bboxes_match_xyxy = bbox_cxcywh_to_xyxy(tea_bboxes_match)
+            stu_bboxes_match_xyxy = bbox_cxcywh_to_xyxy(stu_bboxes_match)
+            iou_score = bbox_iou(
+                    tea_bboxes_match_xyxy.split(4, -1),
+                    stu_bboxes_match_xyxy.split(4, -1))
+            q_score = scores.pow(gamma) * iou_score.pow(1 - gamma)
+            q_score = q_score.reshape([-1, M, 1])
 
-            loss_mimic_valid = paddle.concat([
-                paddle.gather(
-                    t, I, axis=0) if len(I) > 0 else paddle.zeros([0, t.shape[-1]])
-                for t, (I, _) in zip(loss_mimic, tea_match_indices)
-            ]) # [5, 256]
+            # tea_match_indices = teacher_loss_distill_pairs['match_indices']
+            # tea_src_logit = teacher_loss_distill_pairs['src_logit'] # [5, 80]
+            # scores = F.softmax(tea_src_logit).max(-1).unsqueeze(-1)
 
-            feat_loss = q_score * loss_mimic_valid
-            feat_loss = feat_loss.sum() / (d * hw * M)
+            # tea_iou_score = teacher_loss_distill_pairs['iou_score'] # [5, 1]
+            # q_score = scores.pow(gamma) * tea_iou_score.pow(1 - gamma)
+
+            # loss_mimic_valid = paddle.concat([
+            #     paddle.gather(
+            #         t, I, axis=0) if len(I) > 0 else paddle.zeros([0, t.shape[-1]])
+            #     for t, (I, _) in zip(loss_mimic, tea_match_indices)
+            # ]) # [5, 256]
+            #feat_loss = q_score * loss_mimic_valid
+
+            feat_loss = q_score * loss_mimic
+            feat_loss = feat_loss.sum() / (d * hw * M * bs)
         else:
             feat_loss = paddle.zeros([1])
 

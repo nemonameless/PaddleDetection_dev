@@ -405,8 +405,8 @@ class PPDETRTransformer(nn.Layer):
             memory, spatial_shapes, denoising_class, denoising_bbox_unact)
         # [2, 300, 256] [2, 300, 4] [2, 300, 4] [2, 300, 80]
 
-        if self.for_distill:
-            self.distill_pairs['proj_queries'] = target
+        # if self.for_distill:
+        #     self.distill_pairs['proj_queries'] = target
 
         # decoder
         out_bboxes, out_logits = self.decoder(
@@ -421,10 +421,12 @@ class PPDETRTransformer(nn.Layer):
             attn_mask=attn_mask)
 
         if self.for_distill:
-            dn_out_bboxes, dec_out_bboxes = paddle.split(out_bboxes, dn_meta['dn_num_split'], axis=2)
-            dn_out_logits, dec_out_logits = paddle.split(out_logits, dn_meta['dn_num_split'], axis=2)
+            _, dec_out_bboxes = paddle.split(out_bboxes, dn_meta['dn_num_split'], axis=2)
+            _, dec_out_logits = paddle.split(out_logits, dn_meta['dn_num_split'], axis=2)
             self.distill_pairs['out_bboxes_kd'] = dec_out_bboxes
             self.distill_pairs['out_logits_kd'] = dec_out_logits
+            _, dec_target = paddle.split(target, dn_meta['dn_num_split'], axis=1)
+            self.distill_pairs['proj_queries'] = dec_target
 
         # [1, 2, 300, 4] [1, 2, 300, 80]
         return (out_bboxes, out_logits, enc_topk_bboxes, enc_topk_logits,
