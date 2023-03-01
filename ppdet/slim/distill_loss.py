@@ -474,6 +474,10 @@ class CWDFeatureLoss(nn.Layer):
         return self.loss_weight * loss / (C * N)
 
 
+from IPython import embed
+from ppdet.modeling.transformers.utils import bbox_cxcywh_to_xyxy
+from ppdet.modeling.bbox_utils import bbox_iou
+from ppdet.modeling.ssod.utils import QFLv2
 @register
 class DistillPPDINOLoss(nn.Layer):
     def __init__(
@@ -491,6 +495,9 @@ class DistillPPDINOLoss(nn.Layer):
         self.logits_distill = logits_distill
         self.feat_distill = feat_distill
 
+        self.bce_loss = nn.BCELoss(reduction='mean')
+        self.giou_loss = GIoULoss()
+
         self.mse_loss = nn.MSELoss(reduction='none')
         # if logits_distill and self.loss_weight_logits > 0:
 
@@ -503,10 +510,52 @@ class DistillPPDINOLoss(nn.Layer):
 
         teacher_loss_distill_pairs = teacher_model.detr_head.loss.distill_pairs
 
-        # if self.logits_distill and self.loss_weight_logits > 0:
         logits_loss = paddle.zeros([1])
-        gamma = 0.5
+        # matcher = 
+        if self.logits_distill and self.loss_weight_logits > 0:
+            tea_bboxes = teacher_distill_pairs['out_bboxes_kd']
+            tea_logits = teacher_distill_pairs['out_logits_kd']
+            stu_bboxes = student_distill_pairs['out_bboxes_kd']
+            stu_logits = student_distill_pairs['out_logits_kd']
+            K, bs, M, _ = tea_bboxes.shape
+            K, bs, N, _ = stu_bboxes.shape
+            assert M >= N
+            embed()
+            loss_instance = paddle.zeros([1])
+            loss_relation = paddle.zeros([1])
+            beta, yy = 1, 1
+            for i in range(K):
+                # match_indices = self.matcher(
+                #     tea_bboxes[i].detach(), tea_logits[i].detach(),
+                #     stu_bboxes[i], stu_logits[i])
+                tea_logits_match = tea_logits[i][:N]
+                tea_bboxes_match = tea_bboxes[i][:N]
 
+                #loss_cls = self.bce_loss(tea_logits_match, stu_logits[i])
+                loss_cls = F.binary_cross_entropy(F.sigmoid(tea_logits_match), F.sigmoid(stu_logits[i])) # reduction='mean'
+                # loss_cls = QFLv2(F.sigmoid(tea_logits_match), F.sigmoid(stu_logits[i])) # reduction='mean'
+
+                tea_bboxes_match_xyxy = bbox_cxcywh_to_xyxy(tea_bboxes_match)
+                stu_bboxes_i_xyxy = bbox_cxcywh_to_xyxy(stu_bboxes[i])
+                giou = bbox_iou(
+                        tea_bboxes_match_xyxy.split(4, -1),
+                        stu_bboxes_i_xyxy.split(4, -1), giou=True)
+                loss_giou = (1.0 - giou).mean()
+                #loss_giou = self.giou_loss(tea_bboxes_match, stu_bboxes[i])
+
+                loss_l1 = F.l1_loss(tea_bboxes_match_xyxy, stu_bboxes_i_xyxy)
+                #loss_l1 = F.l1_loss(tea_bboxes_match, stu_bboxes[i])
+
+                loss_instance_k = loss_cls + beta * loss_giou + yy * loss_l1
+                loss_instance += loss_instance_k
+
+
+                # loss_relation_k = 
+                # loss_relation += loss_relation_k
+
+            logits_loss = loss_instance + loss_relation
+
+        gamma = 0.5
         if self.feat_distill and self.loss_weight_feat > 0:
             inputs = student_model.inputs
             assert 'gt_bbox' in inputs

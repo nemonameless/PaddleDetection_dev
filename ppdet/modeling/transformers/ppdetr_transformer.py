@@ -378,7 +378,7 @@ class PPDETRTransformer(nn.Layer):
         # input projection and embedding
         (memory, spatial_shapes,
          level_start_index) = self._get_encoder_input(feats)
-        # memory.shape [1, ?, 256]
+        # memory.shape [1, 8400, 256]
 
         if self.for_distill:
             self.distill_pairs['feat_flatten'] = memory
@@ -387,7 +387,8 @@ class PPDETRTransformer(nn.Layer):
 
         # prepare denoising training
         is_teacher = gt_meta.get('is_teacher', False)
-        if self.training and not is_teacher:
+        #if self.training and not is_teacher:
+        if self.training:
             denoising_class, denoising_bbox_unact, attn_mask, dn_meta = \
                 get_contrastive_denoising_training_group(gt_meta,
                                             self.num_classes,
@@ -407,21 +408,37 @@ class PPDETRTransformer(nn.Layer):
         if self.for_distill:
             self.distill_pairs['proj_queries'] = target
 
-        # decoder
-        out_bboxes, out_logits = self.decoder(
-            target,
-            init_ref_points_unact,
-            memory,
-            spatial_shapes,
-            level_start_index,
-            self.dec_bbox_head,
-            self.dec_score_head,
-            self.query_pos_head,
-            attn_mask=attn_mask)
+        if not hasattr(self, "out_bboxes"):
+            # decoder
+            out_bboxes, out_logits = self.decoder(
+                target,
+                init_ref_points_unact,
+                memory,
+                spatial_shapes,
+                level_start_index,
+                self.dec_bbox_head,
+                self.dec_score_head,
+                self.query_pos_head,
+                attn_mask=attn_mask)
+            if self.for_distill:
+                # save teacher outs
+                self.out_bboxes = out_bboxes
+                self.out_logits = out_logits
+        else:
+            # student use teacher outs
+            out_bboxes = self.out_bboxes
+            out_logits = self.out_logits
 
         if self.for_distill:
-            self.distill_pairs['out_bboxes_kd'] = out_bboxes[-1]
-            self.distill_pairs['out_logits_kd'] = out_logits[-1]
+            if 1: #not is_teacher:
+                # student model 300+200
+                dn_out_bboxes, dec_out_bboxes = paddle.split(out_bboxes, dn_meta['dn_num_split'], axis=2)
+                dn_out_logits, dec_out_logits = paddle.split(out_logits, dn_meta['dn_num_split'], axis=2)
+                self.distill_pairs['out_bboxes_kd'] = dec_out_bboxes
+                self.distill_pairs['out_logits_kd'] = dec_out_logits
+            # else:
+            #     self.distill_pairs['out_bboxes_kd'] = out_bboxes
+            #     self.distill_pairs['out_logits_kd'] = out_logits
 
         # [1, 2, 300, 4] [1, 2, 300, 80]
         return (out_bboxes, out_logits, enc_topk_bboxes, enc_topk_logits,

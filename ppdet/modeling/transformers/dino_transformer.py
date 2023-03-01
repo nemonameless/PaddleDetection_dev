@@ -599,8 +599,8 @@ class DINOTransformer(nn.Layer):
         out_logits = paddle.stack(out_logits)
         if self.for_distill:
             # self.distill_pairs['pos_query_dec'] = init_ref_points_unact
-            self.distill_pairs['out_bboxes_kd'] = out_bboxes[-1]
-            self.distill_pairs['out_logits_kd'] = out_logits[-1]
+            self.distill_pairs['out_bboxes_kd'] = out_bboxes
+            self.distill_pairs['out_logits_kd'] = out_logits
 
         # [6, bs, 900, 4] [6, bs, 900, 80] [bs, 900, 4] [bs, 900, 80]
         return (out_bboxes, out_logits, enc_topk_bboxes, enc_topk_logits,
