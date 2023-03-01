@@ -420,7 +420,7 @@ class PPDETRTransformer(nn.Layer):
             self.query_pos_head,
             attn_mask=attn_mask)
 
-        if self.for_distill:
+        if self.for_distill and dn_meta:
             _, dec_out_bboxes = paddle.split(out_bboxes, dn_meta['dn_num_split'], axis=2)
             _, dec_out_logits = paddle.split(out_logits, dn_meta['dn_num_split'], axis=2)
             self.distill_pairs['out_bboxes_kd'] = dec_out_bboxes
