@@ -79,9 +79,14 @@ slim_method: PPDINODistill
 distill_loss: DistillPPDINOLoss
 
 DistillPPDINOLoss: # r50vd -> r18vd
-  loss_weight: {'logits': 1.0, 'feat': 20.0}
-  logits_distill: True
-  #logits_distill: False
-  #feat_distill: True
-  feat_distill: False
-  feat_distiller: 'aafd'
+  loss_weight: {'logits': 1.0, 'feat': 2.0}
+  #logits_distill: True
+  logits_distill: False
+  feat_distill: True
+  #feat_distill: False
+  feat_distiller: 'fgd'
+  feat_distill_place: 'proj_feats'
+  student_channels: [256, 256, 256] # r50
+  teacher_channels: [256, 256, 256] # r18
+  # student_channels: [512, 1024, 2048] # r50
+  # teacher_channels: [128, 256, 512] # r18

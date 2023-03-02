@@ -488,6 +488,7 @@ class DistillPPDINOLoss(nn.Layer):
             logits_distill=False,
             feat_distill=True,
             feat_distiller='aafd',
+            feat_distill_place='proj_feats',
             student_channels=[512, 1024, 2048], # r50
             teacher_channels=[384, 768, 1536]): # swin-L-384
         super(DistillPPDINOLoss, self).__init__()
@@ -503,6 +504,48 @@ class DistillPPDINOLoss(nn.Layer):
 
         self.mse_loss = nn.MSELoss(reduction='none')
 
+        self.feat_distiller = feat_distiller
+        if feat_distill and self.loss_weight_feat > 0:
+            assert feat_distiller in ['aafd', 'cwd', 'fgd', 'pkd', 'mgd', 'mimic']
+            assert feat_distill_place in ['backbone_feats', 'neck_feats', 'proj_feats']
+            self.feat_distill_place = feat_distill_place
+
+            if feat_distiller in ['cwd', 'fgd', 'pkd', 'mgd', 'mimic']:
+                self.distill_feat_loss_modules = []
+                for i in range(len(student_channels)):
+                    if feat_distiller == 'cwd':
+                        feat_loss_module = CWDFeatureLoss(
+                            student_channels[i], teacher_channels[i], normalize=True)
+                    elif feat_distiller == 'fgd':
+                        feat_loss_module = FGDFeatureLoss(
+                            student_channels[i],
+                            teacher_channels[i], 
+                            normalize=True,
+                            alpha_fgd=0.00001,
+                            beta_fgd=0.000005,
+                            gamma_fgd=0.00001,
+                            lambda_fgd=0.00000005)
+                    elif feat_distiller == 'pkd':
+                        feat_loss_module = PKDFeatureLoss(
+                            student_channels[i],
+                            teacher_channels[i], 
+                            normalize=True,
+                            resize_stu=True)
+                    elif feat_distiller == 'mgd':
+                        feat_loss_module = MGDFeatureLoss(
+                            student_channels[i],
+                            teacher_channels[i], 
+                            normalize=True,
+                            loss_func='ssim')
+                    elif feat_distiller == 'mimic':
+                        feat_loss_module = MimicFeatureLoss(
+                            student_channels[i],
+                            teacher_channels[i], 
+                            normalize=True)
+                    else:
+                        raise ValueError
+                    self.distill_feat_loss_modules.append(feat_loss_module)
+
     def _get_from_matching(self, src, target, match_indices):
         src_assign = paddle.concat([
             paddle.gather(
@@ -516,113 +559,115 @@ class DistillPPDINOLoss(nn.Layer):
         ])
         return src_assign, target_assign
 
+    def _logits_loss(self, teacher_distill_pairs, student_distill_pairs, teacher_loss_distill_pairs):
+        tea_bboxes = teacher_distill_pairs['out_bboxes_kd']
+        tea_logits = teacher_distill_pairs['out_logits_kd']
+        stu_bboxes = student_distill_pairs['out_bboxes_kd']
+        stu_logits = student_distill_pairs['out_logits_kd']
+        K, bs, M, _ = tea_bboxes.shape
+        K, bs, N, _ = stu_bboxes.shape
+        assert M >= N
+
+        loss_instance = paddle.zeros([1])
+        loss_relation = paddle.zeros([1])
+        beta, yy = 1, 1
+        for i in range(K):
+            match_indices = self.bimatcher( # [2, 300, 4]
+                tea_bboxes[i].detach(), stu_bboxes[i].detach(), tea_logits[i].detach(), stu_logits[i].detach())
+
+            tea_bboxes_match, stu_bboxes_match = self._get_from_matching(
+                tea_bboxes[-1].detach(), stu_bboxes[i], match_indices)
+            tea_logits_match, stu_logits_match = self._get_from_matching(
+                tea_logits[-1].detach(), stu_logits[i], match_indices)
+
+            #loss_cls = self.bce_loss(tea_logits_match, stu_logits_match)
+            loss_cls = F.binary_cross_entropy(F.sigmoid(tea_logits_match), F.sigmoid(stu_logits_match)) # reduction='mean'
+            # loss_cls = QFLv2(F.sigmoid(tea_logits_match), F.sigmoid(stu_logits_match)) # reduction='mean'
+
+            tea_bboxes_match_xyxy = bbox_cxcywh_to_xyxy(tea_bboxes_match)
+            stu_bboxes_match_xyxy = bbox_cxcywh_to_xyxy(stu_bboxes_match)
+            giou = bbox_iou(
+                    tea_bboxes_match_xyxy.split(4, -1),
+                    stu_bboxes_match_xyxy.split(4, -1), giou=True)
+            loss_giou = (1.0 - giou).mean()
+            #loss_giou = self.giou_loss(tea_bboxes_match, stu_bboxes_match)
+
+            loss_l1 = F.l1_loss(tea_bboxes_match_xyxy, stu_bboxes_match_xyxy)
+            #loss_l1 = F.l1_loss(tea_bboxes_match, stu_bboxes_match)
+
+            loss_instance_k = loss_cls + beta * loss_giou + yy * loss_l1
+            loss_instance += loss_instance_k
+
+            # loss_relation_k = 
+            # loss_relation += loss_relation_k
+
+        logits_loss = loss_instance + loss_relation
+        return logits_loss
+
+    def _aafd_feat_loss(self, teacher_distill_pairs, student_distill_pairs):
+        gamma = 0.5
+        stu_feats = student_distill_pairs['feat_flatten'] # [bs, hw, d]
+        tea_feats = teacher_distill_pairs['feat_flatten'] # [bs, hw, d]
+        tea_proj_queries = teacher_distill_pairs['proj_queries'] # [bs, M, d]
+        bs, hw, d = stu_feats.shape
+        bs, M, d = tea_proj_queries.shape
+
+        soft_mask = F.sigmoid(paddle.matmul(tea_proj_queries, tea_feats.transpose([0, 2, 1])))
+        # soft_mask.shape [2, 300, 8500] # [bs, M, hw]
+        # tea_feats.shape [2, 8500, 256] # [bs, hw, d]
+        loss_mimic = self.mse_loss(paddle.matmul(soft_mask, tea_feats), paddle.matmul(soft_mask, stu_feats)) # [2, 300, 256]
+
+        tea_bboxes = teacher_distill_pairs['out_bboxes_kd'][-1]
+        tea_logits = teacher_distill_pairs['out_logits_kd'][-1]
+        stu_bboxes = student_distill_pairs['out_bboxes_kd'][-1]
+        stu_logits = student_distill_pairs['out_logits_kd'][-1]
+        match_indices = self.bimatcher( # [2, 300, 4]
+            tea_bboxes.detach(), stu_bboxes.detach())
+        tea_bboxes_match, stu_bboxes_match = self._get_from_matching(
+            tea_bboxes.detach(), stu_bboxes.detach(), match_indices)
+        tea_logits_match, stu_logits_match = self._get_from_matching(
+            tea_logits.detach(), stu_logits, match_indices)
+
+        scores = F.softmax(tea_logits_match).max(-1).unsqueeze(-1)
+        tea_bboxes_match_xyxy = bbox_cxcywh_to_xyxy(tea_bboxes_match)
+        stu_bboxes_match_xyxy = bbox_cxcywh_to_xyxy(stu_bboxes_match)
+        iou_score = bbox_iou(
+                tea_bboxes_match_xyxy.split(4, -1),
+                stu_bboxes_match_xyxy.split(4, -1))
+        q_score = scores.pow(gamma) * iou_score.pow(1 - gamma)
+        q_score = q_score.reshape([-1, M, 1])
+
+        feat_loss = q_score * loss_mimic
+        feat_loss = feat_loss.sum() / (d * hw * M * bs)
+
+        return feat_loss
+
     def forward(self, teacher_model, student_model):
         teacher_distill_pairs = teacher_model.transformer.distill_pairs
         student_distill_pairs = student_model.transformer.distill_pairs
 
         teacher_loss_distill_pairs = teacher_model.detr_head.loss.distill_pairs
 
-        logits_loss = paddle.zeros([1])
-        # matcher = 
         if self.logits_distill and self.loss_weight_logits > 0:
-            tea_bboxes = teacher_distill_pairs['out_bboxes_kd']
-            tea_logits = teacher_distill_pairs['out_logits_kd']
-            stu_bboxes = student_distill_pairs['out_bboxes_kd']
-            stu_logits = student_distill_pairs['out_logits_kd']
-            K, bs, M, _ = tea_bboxes.shape
-            K, bs, N, _ = stu_bboxes.shape
-            assert M >= N
-
-            loss_instance = paddle.zeros([1])
-            loss_relation = paddle.zeros([1])
-            beta, yy = 1, 1
-            for i in range(K):
-                match_indices = self.bimatcher( # [2, 300, 4]
-                    tea_bboxes[i].detach(), stu_bboxes[i].detach(), tea_logits[i].detach(), stu_logits[i].detach())
-
-                tea_bboxes_match, stu_bboxes_match = self._get_from_matching(
-                    tea_bboxes[-1].detach(), stu_bboxes[i], match_indices)
-                tea_logits_match, stu_logits_match = self._get_from_matching(
-                    tea_logits[-1].detach(), stu_logits[i], match_indices)
-
-                # tea_logits_match = tea_logits[i][:N]
-                # tea_bboxes_match = tea_bboxes[i][:N]
-
-                #loss_cls = self.bce_loss(tea_logits_match, stu_logits_match)
-                loss_cls = F.binary_cross_entropy(F.sigmoid(tea_logits_match), F.sigmoid(stu_logits_match)) # reduction='mean'
-                # loss_cls = QFLv2(F.sigmoid(tea_logits_match), F.sigmoid(stu_logits_match)) # reduction='mean'
-
-                tea_bboxes_match_xyxy = bbox_cxcywh_to_xyxy(tea_bboxes_match)
-                stu_bboxes_match_xyxy = bbox_cxcywh_to_xyxy(stu_bboxes_match)
-                giou = bbox_iou(
-                        tea_bboxes_match_xyxy.split(4, -1),
-                        stu_bboxes_match_xyxy.split(4, -1), giou=True)
-                loss_giou = (1.0 - giou).mean()
-                #loss_giou = self.giou_loss(tea_bboxes_match, stu_bboxes_match)
-
-                loss_l1 = F.l1_loss(tea_bboxes_match_xyxy, stu_bboxes_match_xyxy)
-                #loss_l1 = F.l1_loss(tea_bboxes_match, stu_bboxes_match)
-
-                loss_instance_k = loss_cls + beta * loss_giou + yy * loss_l1
-                loss_instance += loss_instance_k
-
-
-                # loss_relation_k = 
-                # loss_relation += loss_relation_k
-
-            logits_loss = loss_instance + loss_relation
-
-        gamma = 0.5
+            logits_loss = self._logits_loss(teacher_distill_pairs, student_distill_pairs, teacher_loss_distill_pairs)  
+        else:
+            logits_loss = paddle.zeros([1])
+        
         if self.feat_distill and self.loss_weight_feat > 0:
-            inputs = student_model.inputs
-            assert 'gt_bbox' in inputs
-            stu_feats = student_distill_pairs['feat_flatten'] # [bs, hw, d]
-            tea_feats = teacher_distill_pairs['feat_flatten'] # [bs, hw, d]
-            tea_proj_queries = teacher_distill_pairs['proj_queries'] # [bs, M, d]
-            bs, hw, d = stu_feats.shape
-            bs, M, d = tea_proj_queries.shape
-
-            soft_mask = F.sigmoid(paddle.matmul(tea_proj_queries, tea_feats.transpose([0, 2, 1])))
-            # soft_mask.shape [2, 300, 8500] # [bs, M, hw]
-            # tea_feats.shape [2, 8500, 256] # [bs, hw, d]
-            loss_mimic = self.mse_loss(paddle.matmul(soft_mask, tea_feats), paddle.matmul(soft_mask, stu_feats)) # [2, 300, 256]
-
-            tea_bboxes = teacher_distill_pairs['out_bboxes_kd'][-1]
-            tea_logits = teacher_distill_pairs['out_logits_kd'][-1]
-            stu_bboxes = student_distill_pairs['out_bboxes_kd'][-1]
-            stu_logits = student_distill_pairs['out_logits_kd'][-1]
-            match_indices = self.bimatcher( # [2, 300, 4]
-                tea_bboxes.detach(), stu_bboxes.detach())
-            tea_bboxes_match, stu_bboxes_match = self._get_from_matching(
-                tea_bboxes.detach(), stu_bboxes.detach(), match_indices)
-            tea_logits_match, stu_logits_match = self._get_from_matching(
-                tea_logits.detach(), stu_logits, match_indices)
-
-            scores = F.softmax(tea_logits_match).max(-1).unsqueeze(-1)
-            tea_bboxes_match_xyxy = bbox_cxcywh_to_xyxy(tea_bboxes_match)
-            stu_bboxes_match_xyxy = bbox_cxcywh_to_xyxy(stu_bboxes_match)
-            iou_score = bbox_iou(
-                    tea_bboxes_match_xyxy.split(4, -1),
-                    stu_bboxes_match_xyxy.split(4, -1))
-            q_score = scores.pow(gamma) * iou_score.pow(1 - gamma)
-            q_score = q_score.reshape([-1, M, 1])
-
-            # tea_match_indices = teacher_loss_distill_pairs['match_indices']
-            # tea_src_logit = teacher_loss_distill_pairs['src_logit'] # [5, 80]
-            # scores = F.softmax(tea_src_logit).max(-1).unsqueeze(-1)
-
-            # tea_iou_score = teacher_loss_distill_pairs['iou_score'] # [5, 1]
-            # q_score = scores.pow(gamma) * tea_iou_score.pow(1 - gamma)
-
-            # loss_mimic_valid = paddle.concat([
-            #     paddle.gather(
-            #         t, I, axis=0) if len(I) > 0 else paddle.zeros([0, t.shape[-1]])
-            #     for t, (I, _) in zip(loss_mimic, tea_match_indices)
-            # ]) # [5, 256]
-            #feat_loss = q_score * loss_mimic_valid
-
-            feat_loss = q_score * loss_mimic
-            feat_loss = feat_loss.sum() / (d * hw * M * bs)
+            if self.feat_distiller == 'aafd':
+                feat_loss = self._aafd_feat_loss(teacher_distill_pairs, student_distill_pairs)
+            else:
+                feat_loss_list = []
+                inputs = student_model.inputs
+                assert 'gt_bbox' in inputs
+                assert self.feat_distill_place in student_distill_pairs
+                assert self.feat_distill_place in teacher_distill_pairs
+                stu_feats = student_distill_pairs[self.feat_distill_place]
+                tea_feats = teacher_distill_pairs[self.feat_distill_place]
+                for i, loss_module in enumerate(self.distill_feat_loss_modules):
+                    feat_loss_list.append(
+                        loss_module(stu_feats[i], tea_feats[i], inputs))
+                feat_loss = paddle.add_n(feat_loss_list)
         else:
             feat_loss = paddle.zeros([1])
 
