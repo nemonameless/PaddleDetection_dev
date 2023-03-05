@@ -513,30 +513,15 @@ class DistillPPDINOLoss(nn.Layer):
             if feat_distiller in ['cwd', 'fgd', 'pkd', 'mgd', 'mimic']:
                 self.distill_feat_loss_modules = []
                 for i in range(len(student_channels)):
-                    if feat_distiller == 'cwd':
-                        feat_loss_module = CWDFeatureLoss(
-                            student_channels[i], teacher_channels[i], normalize=True)
-                    elif feat_distiller == 'fgd':
+                    if feat_distiller == 'fgd':
                         feat_loss_module = FGDFeatureLoss(
                             student_channels[i],
-                            teacher_channels[i], 
+                            teacher_channels[i],
                             normalize=True,
                             alpha_fgd=0.00001,
                             beta_fgd=0.000005,
                             gamma_fgd=0.00001,
                             lambda_fgd=0.00000005)
-                    elif feat_distiller == 'pkd':
-                        feat_loss_module = PKDFeatureLoss(
-                            student_channels[i],
-                            teacher_channels[i], 
-                            normalize=True,
-                            resize_stu=True)
-                    elif feat_distiller == 'mgd':
-                        feat_loss_module = MGDFeatureLoss(
-                            student_channels[i],
-                            teacher_channels[i], 
-                            normalize=True,
-                            loss_func='ssim')
                     elif feat_distiller == 'mimic':
                         feat_loss_module = MimicFeatureLoss(
                             student_channels[i],

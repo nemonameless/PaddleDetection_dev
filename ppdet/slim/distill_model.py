@@ -388,7 +388,7 @@ class PPDINODistillModel(DistillModel):
             total_loss = det_total_loss + logits_loss + feat_loss
             student_loss['loss'] = total_loss
             student_loss['stu_loss'] = det_total_loss
-            student_loss['logits_loss'] = logits_loss # 0.0
+            student_loss['logits_loss'] = logits_loss
             student_loss['feat_loss'] = feat_loss
             student_loss['tea_loss'] = teacher_loss['loss'] # just print
             return student_loss

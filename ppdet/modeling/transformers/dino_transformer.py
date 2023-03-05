@@ -571,9 +571,6 @@ class DINOTransformer(nn.Layer):
         # [2, 1100, 256] [2, 1100, 4] [2, 900, 4] [2, 900, 80] train
         # [2, 900, 256] [2, 900, 4] [2, 900, 4] [2, 900, 80] val
 
-        if self.for_distill:
-            self.distill_pairs['proj_queries'] = target
-
         # decoder
         inter_feats, inter_ref_bboxes_unact = self.decoder(
             target, init_ref_points_unact, memory, spatial_shapes,
@@ -597,10 +594,21 @@ class DINOTransformer(nn.Layer):
 
         out_bboxes = paddle.stack(out_bboxes)
         out_logits = paddle.stack(out_logits)
+
         if self.for_distill:
-            # self.distill_pairs['pos_query_dec'] = init_ref_points_unact
-            self.distill_pairs['out_bboxes_kd'] = out_bboxes
-            self.distill_pairs['out_logits_kd'] = out_logits
+            if dn_meta:
+                # student
+                _, dec_out_bboxes = paddle.split(out_bboxes, dn_meta['dn_num_split'], axis=2)
+                _, dec_out_logits = paddle.split(out_logits, dn_meta['dn_num_split'], axis=2)
+                self.distill_pairs['out_bboxes_kd'] = dec_out_bboxes
+                self.distill_pairs['out_logits_kd'] = dec_out_logits
+                _, dec_target = paddle.split(target, dn_meta['dn_num_split'], axis=1)
+                self.distill_pairs['proj_queries'] = dec_target
+            else:
+                # teacher
+                self.distill_pairs['out_bboxes_kd'] = out_bboxes
+                self.distill_pairs['out_logits_kd'] = out_logits
+                self.distill_pairs['proj_queries'] = target
 
         # [6, bs, 900, 4] [6, bs, 900, 80] [bs, 900, 4] [bs, 900, 80]
         return (out_bboxes, out_logits, enc_topk_bboxes, enc_topk_logits,
