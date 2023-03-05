@@ -555,7 +555,7 @@ class DistillPPDINOLoss(nn.Layer):
 
         loss_instance = paddle.zeros([1])
         loss_relation = paddle.zeros([1])
-        beta, yy = 1, 1
+        aa, beta, yy = 1, 2, 5
         for i in range(K):
             match_indices = self.bimatcher( # [2, 300, 4]
                 tea_bboxes[i].detach(), stu_bboxes[i].detach(), tea_logits[i].detach(), stu_logits[i].detach())
@@ -565,23 +565,33 @@ class DistillPPDINOLoss(nn.Layer):
             tea_logits_match, stu_logits_match = self._get_from_matching(
                 tea_logits[-1].detach(), stu_logits[i], match_indices)
 
-            #loss_cls = self.bce_loss(tea_logits_match, stu_logits_match)
-            loss_cls = F.binary_cross_entropy(F.sigmoid(tea_logits_match), F.sigmoid(stu_logits_match)) # reduction='mean'
-            # loss_cls = QFLv2(F.sigmoid(tea_logits_match), F.sigmoid(stu_logits_match)) # reduction='mean'
+            #loss_cls = self.bce_loss(F.sigmoid(stu_logits_match), F.sigmoid(tea_logits_match))
+            loss_cls = F.binary_cross_entropy(F.sigmoid(stu_logits_match), F.sigmoid(tea_logits_match)) # reduction='mean'
+            #loss_cls = QFLv2(F.sigmoid(stu_logits_match), F.sigmoid(tea_logits_match)) # reduction='mean'
 
-            tea_bboxes_match_xyxy = bbox_cxcywh_to_xyxy(tea_bboxes_match)
-            stu_bboxes_match_xyxy = bbox_cxcywh_to_xyxy(stu_bboxes_match)
-            giou = bbox_iou(
-                    tea_bboxes_match_xyxy.split(4, -1),
-                    stu_bboxes_match_xyxy.split(4, -1), giou=True)
-            loss_giou = (1.0 - giou).mean()
+            # tea_bboxes_match_xyxy = bbox_cxcywh_to_xyxy(tea_bboxes_match)
+            # stu_bboxes_match_xyxy = bbox_cxcywh_to_xyxy(stu_bboxes_match)
+            # giou = bbox_iou(
+            #         tea_bboxes_match_xyxy.split(4, -1),
+            #         stu_bboxes_match_xyxy.split(4, -1), giou=True)
+            # loss_giou = (1.0 - giou).mean()
             #loss_giou = self.giou_loss(tea_bboxes_match, stu_bboxes_match)
 
-            loss_l1 = F.l1_loss(tea_bboxes_match_xyxy, stu_bboxes_match_xyxy)
+            #loss_l1 = F.l1_loss(tea_bboxes_match_xyxy, stu_bboxes_match_xyxy)
             #loss_l1 = F.l1_loss(tea_bboxes_match, stu_bboxes_match)
 
-            loss_instance_k = loss_cls + beta * loss_giou + yy * loss_l1
+            # Compute the giou cost betwen boxes
+            loss_giou = self.giou_loss(
+                bbox_cxcywh_to_xyxy(stu_bboxes_match),
+                bbox_cxcywh_to_xyxy(tea_bboxes_match)).mean()
+
+            # Compute the L1 cost between boxes
+            loss_l1 = (stu_bboxes_match - tea_bboxes_match).abs().mean()
+
+            loss_instance_k = aa * loss_cls + beta * loss_giou + yy * loss_l1
+            # 1:2:5
             loss_instance += loss_instance_k
+
 
             # loss_relation_k = 
             # loss_relation += loss_relation_k
@@ -600,7 +610,7 @@ class DistillPPDINOLoss(nn.Layer):
         soft_mask = F.sigmoid(paddle.matmul(tea_proj_queries, tea_feats.transpose([0, 2, 1])))
         # soft_mask.shape [2, 300, 8500] # [bs, M, hw]
         # tea_feats.shape [2, 8500, 256] # [bs, hw, d]
-        loss_mimic = self.mse_loss(paddle.matmul(soft_mask, tea_feats), paddle.matmul(soft_mask, stu_feats)) # [2, 300, 256]
+        loss_mimic = self.mse_loss(paddle.matmul(soft_mask, stu_feats), paddle.matmul(soft_mask, tea_feats)) # [2, 300, 256]
 
         tea_bboxes = teacher_distill_pairs['out_bboxes_kd'][-1]
         tea_logits = teacher_distill_pairs['out_logits_kd'][-1]

@@ -1,8 +1,8 @@
 export FLAGS_allocator_strategy=auto_growth
 model_type=dino
 job_name=distill_stu_dino_r18vd_12e
-#tea_job_name=distill_tea_dino_r50vd_to_r18vd_12e
-tea_job_name=distill_tea_dino_r50vd_to_r18vd_12e_fgd
+tea_job_name=distill_tea_dino_r50vd_to_r18vd_12e
+#tea_job_name=distill_tea_dino_r50vd_to_r18vd_12e_fgd
 
 config=configs/${model_type}/${job_name}.yml
 tea_config=configs/${model_type}/${tea_job_name}.yml
