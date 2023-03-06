@@ -1,9 +1,9 @@
 _BASE_: [
-  '../datasets/coco_detection.yml',
-  '../runtime.yml',
-  '_base_/optimizer_12e.yml',
-  '_base_/dino_r50vd_pan.yml',
-  '_base_/yoloe_reader.yml',
+  '../../datasets/coco_detection.yml',
+  '../../runtime.yml',
+  '../_base_/optimizer_12e.yml',
+  '../_base_/dino_r50vd_pan.yml',
+  '../_base_/yoloe_reader.yml',
 ]
 
 weights: output/dino_r18vd_pan_3_0_6_1x_coco/model_final

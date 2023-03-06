@@ -1,11 +1,11 @@
 export FLAGS_allocator_strategy=auto_growth
-job_name=distill_stu_ppdino_r18vd_12e
+job_name=distill_stu_dino_r18_12e
 
-config=configs/dino/ppdino_distill/distill_stu_ppdino_r18vd_12e.yml
-tea_config=configs/dino/ppdino_distill/distill_tea_ppdino_r50vd_to_r18vd_12e.yml
+config=configs/dino/dino_distill/distill_stu_dino_r18_12e.yml
+tea_config=configs/dino/dino_distill/distill_tea_dino_r50_to_r18_12e.yml
 
 log_dir=log_dir/${job_name}
-weights=output/distill_stu_ppdino_r18vd_12e/0.pdparams
+weights=output/distill_stu_dino_r18_12e/0.pdparams
 
 # 1. training
 CUDA_VISIBLE_DEVICES=2 python3.7 tools/train.py -c ${config} --slim_config ${tea_config} --eval #--amp

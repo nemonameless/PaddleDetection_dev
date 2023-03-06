@@ -14,22 +14,18 @@ hidden_dim: 256
 use_focal_loss: True
 
 DETR:
-  backbone: ResNet
+  backbone: SwinTransformer
   neck: YOLOCSPPAN
   transformer: PPDETRTransformer
   detr_head: DINOHead
   post_process: DETRBBoxPostProcess
 
-ResNet:
-  # index 0 stands for res2
-  depth: 50
-  variant: d
-  norm_type: bn
-  freeze_at: 0
-  return_idx: [1, 2, 3]
-  lr_mult_list: [0.1, 0.1, 0.1, 0.1]
-  num_stages: 4
-  freeze_stem_only: True
+SwinTransformer:
+  arch: 'swin_L_384' # ['swin_T_224', 'swin_S_224', 'swin_B_224', 'swin_L_224', 'swin_B_384', 'swin_L_384']
+  ape: false
+  drop_path_rate: 0.2
+  patch_norm: true
+  out_indices: [1, 2, 3]
 
 YOLOCSPPAN:
   depthwise: False
@@ -80,8 +76,8 @@ distill_loss: DistillPPDINOLoss
 
 DistillPPDINOLoss: # r50vd -> r18vd
   loss_weight: {'logits': 1.0, 'feat': 20.0}
-  #logits_distill: True
-  logits_distill: False
-  feat_distill: True
-  #feat_distill: False
+  logits_distill: True
+  #logits_distill: False
+  #feat_distill: True
+  feat_distill: False
   feat_distiller: 'aafd'

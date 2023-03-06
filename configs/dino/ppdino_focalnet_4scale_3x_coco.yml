@@ -1,0 +1,104 @@
+_BASE_: [
+  '../datasets/coco_detection.yml',
+  '../runtime.yml',
+  '_base_/optimizer_swin_3x.yml',
+  #'_base_/dino_swin.yml',
+  #'_base_/dino_reader.yml',
+  #'_base_/dino_r50vd_pan.yml',
+  '_base_/yoloe_reader.yml',
+]
+
+weights: output/ppdino_swin_large_384_4scale_3x_coco/model_final
+find_unused_parameters: True
+log_iter: 50
+snapshot_epoch: 1
+
+
+worker_num: 4
+TrainReader:
+  batch_size: 2 # 2*8
+
+
+architecture: DETR
+pretrain_weights: https://bj.bcebos.com/v1/paddledet/models/pretrained/focalnet_large_lrf_384_fl4_pretrained.pdparams
+norm_type: sync_bn
+use_ema: True
+ema_decay: 0.9999
+ema_decay_type: "exponential"
+hidden_dim: 256
+use_focal_loss: True
+
+DETR:
+  backbone: FocalNet
+  neck: YOLOCSPPAN
+  transformer: PPDETRTransformer
+  detr_head: DINOHead
+  post_process: DETRBBoxPostProcess
+
+FocalNet:
+  arch: 'focalnet_L_384_22k_fl4'
+  out_indices: [1, 2, 3]
+
+YOLOCSPPAN:
+  depthwise: False
+  use_trans: True
+  nhead: 8
+  num_layers: 2
+  dim_feedforward: 1024
+  dropout: 0.1
+  activation: 'gelu'
+  proj_dim: [256, 256, 256]
+  proj_use_conv: True
+
+PPDETRTransformer:
+  num_queries: 300
+  position_embed_type: sine
+  num_levels: 3
+  nhead: 8
+  num_decoder_layers: 6
+  dim_feedforward: 1024
+  dropout: 0.0
+  activation: relu
+  num_denoising: 100
+  label_noise_ratio: 0.5
+  box_noise_scale: 1.0
+  learnt_init_query: True
+  eval_size: [640, 640]
+
+DINOHead:
+  loss:
+    name: DINOLoss
+    loss_coeff: {class: 1, bbox: 5, giou: 2}
+    aux_loss: True
+    use_vfl: True
+    use_same_match: True
+    same_match_ind: 0
+    matcher:
+      name: HungarianMatcher
+      matcher_coeff: {class: 2, bbox: 5, giou: 2}
+      use_pos_only: True
+
+DETRBBoxPostProcess:
+  num_top_queries: 300
+
+
+epoch: 36
+LearningRate:
+  base_lr: 0.0001
+  schedulers:
+  - !PiecewiseDecay
+    gamma: 1.0 # 0.1
+    milestones: [100] # [33]
+  - !LinearWarmup
+    start_factor: 0.001
+    steps: 2000
+
+OptimizerBuilder:
+  clip_grad_by_norm: 0.1
+  regularizer: false
+  optimizer:
+    type: AdamW
+    weight_decay: 0.0001
+    param_groups:
+        - params: ['absolute_pos_embed', 'relative_position_bias_table', 'norm']
+          weight_decay: 0.

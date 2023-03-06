@@ -1,0 +1,28 @@
+_BASE_: [
+  '../datasets/coco_detection.yml',
+  '../runtime.yml',
+  #'_base_/optimizer_swin_3x.yml',
+  '_base_/optimizer_3x.yml',
+  '_base_/dino_swin.yml',
+  #'_base_/dino_reader.yml',
+  '_base_/yoloe_reader.yml',
+]
+
+weights: output/dino_swin_large_384_4scale_3x_coco/model_final
+find_unused_parameters: True
+log_iter: 50
+snapshot_epoch: 1
+pretrain_weights: https://bj.bcebos.com/v1/paddledet/models/pretrained/swin_large_patch4_window12_384_22kto1k_pretrained.pdparams
+
+
+worker_num: 4
+TrainReader:
+  batch_size: 4
+
+
+SwinTransformer:
+  arch: 'swin_L_384'
+  ape: false
+  drop_path_rate: 0.2
+  patch_norm: true
+  out_indices: [1, 2, 3]
