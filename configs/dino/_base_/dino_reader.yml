@@ -2,6 +2,7 @@ worker_num: 4
 TrainReader:
   sample_transforms:
     - Decode: {}
+    #- DecodeCache: {cache_root: 'dataset/coco/cache/buffer'}
     - RandomFlip: {prob: 0.5}
     - RandomSelect: { transforms1: [ RandomShortSideResize: { short_side_sizes: [ 480, 512, 544, 576, 608, 640, 672, 704, 736, 768, 800 ], max_size: 1333 } ],
                       transforms2: [

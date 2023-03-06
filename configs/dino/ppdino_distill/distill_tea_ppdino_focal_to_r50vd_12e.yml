@@ -5,7 +5,7 @@ for_distill: True
 
 
 architecture: DETR
-pretrain_weights: https://bj.bcebos.com/v1/paddledet/models/legacy_model/dino/ppdino_swin_50e_55.1.pdparams
+pretrain_weights: https://bj.bcebos.com/v1/paddledet/models/legacy_model/dino/ppdino_focal_36e_55.9.pdparams
 norm_type: sync_bn
 use_ema: True
 ema_decay: 0.9999
@@ -14,17 +14,14 @@ hidden_dim: 256
 use_focal_loss: True
 
 DETR:
-  backbone: SwinTransformer
+  backbone: FocalNet
   neck: YOLOCSPPAN
   transformer: PPDETRTransformer
   detr_head: DINOHead
   post_process: DETRBBoxPostProcess
 
-SwinTransformer:
-  arch: 'swin_L_384' # ['swin_T_224', 'swin_S_224', 'swin_B_224', 'swin_L_224', 'swin_B_384', 'swin_L_384']
-  ape: false
-  drop_path_rate: 0.2
-  patch_norm: true
+FocalNet:
+  arch: 'focalnet_L_384_22k_fl4'
   out_indices: [1, 2, 3]
 
 YOLOCSPPAN:
@@ -74,7 +71,7 @@ slim: Distill
 slim_method: PPDINODistill
 distill_loss: DistillPPDINOLoss
 
-DistillPPDINOLoss: # r50vd -> r18vd
+DistillPPDINOLoss: # focal -> r50vd
   loss_weight: {'logits': 1.0, 'feat': 20.0}
   logits_distill: True
   #logits_distill: False
