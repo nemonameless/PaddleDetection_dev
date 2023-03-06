@@ -80,8 +80,8 @@ distill_loss: DistillPPDINOLoss
 
 DistillPPDINOLoss: # r50vd -> r18vd
   loss_weight: {'logits': 1.0, 'feat': 20.0}
-  logits_distill: True
-  #logits_distill: False
-  #feat_distill: True
-  feat_distill: False
+  #logits_distill: True
+  logits_distill: False
+  feat_distill: True
+  #feat_distill: False
   feat_distiller: 'aafd'

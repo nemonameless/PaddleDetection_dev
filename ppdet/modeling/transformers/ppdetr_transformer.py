@@ -424,13 +424,13 @@ class PPDETRTransformer(nn.Layer):
                 _, dec_out_logits = paddle.split(out_logits, dn_meta['dn_num_split'], axis=2)
                 self.distill_pairs['out_bboxes_kd'] = dec_out_bboxes
                 self.distill_pairs['out_logits_kd'] = dec_out_logits
-                _, dec_target = paddle.split(target, dn_meta['dn_num_split'], axis=1)
-                self.distill_pairs['proj_queries'] = dec_target
+                # _, dec_target = paddle.split(target, dn_meta['dn_num_split'], axis=1)
+                # self.distill_pairs['proj_queries'] = dec_target
             else:
                 # teacher
                 self.distill_pairs['out_bboxes_kd'] = out_bboxes
                 self.distill_pairs['out_logits_kd'] = out_logits
-                self.distill_pairs['proj_queries'] = target
+                #self.distill_pairs['proj_queries'] = target
 
         # [1, 2, 300, 4] [1, 2, 300, 80]
         return (out_bboxes, out_logits, enc_topk_bboxes, enc_topk_logits,
@@ -508,6 +508,9 @@ class PPDETRTransformer(nn.Layer):
             target = paddle.gather_nd(output_memory, topk_ind).detach()
         if denoising_class is not None:
             target = paddle.concat([denoising_class, target], 1)
+
+        if self.for_distill:
+            self.distill_pairs['proj_queries'] = paddle.gather_nd(output_memory, topk_ind).detach()
 
         return target, reference_points_unact.detach(
         ), enc_topk_bboxes, enc_topk_logits
