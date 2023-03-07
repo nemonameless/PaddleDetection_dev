@@ -39,9 +39,9 @@ class DETR(BaseArch):
                  exclude_post_process=False):
         super(DETR, self).__init__()
         self.backbone = backbone
+        self.neck = neck
         self.transformer = transformer
         self.detr_head = detr_head
-        self.neck = neck
         self.post_process = post_process
         self.exclude_post_process = exclude_post_process
 
@@ -49,16 +49,13 @@ class DETR(BaseArch):
     def from_config(cls, cfg, *args, **kwargs):
         # backbone
         backbone = create(cfg['backbone'])
-
         # neck
         kwargs = {'input_shape': backbone.out_shape}
         neck = create(cfg['neck'], **kwargs) if cfg['neck'] else None
-
         # transformer
         if neck is not None:
             kwargs = {'input_shape': neck.out_shape}
         transformer = create(cfg['transformer'], **kwargs)
-
         # head
         kwargs = {
             'hidden_dim': transformer.hidden_dim,
@@ -77,6 +74,8 @@ class DETR(BaseArch):
     def _forward(self):
         # Backbone
         body_feats = self.backbone(self.inputs)
+
+        # Neck
         if self.neck is not None:
             body_feats = self.neck(body_feats)
 
