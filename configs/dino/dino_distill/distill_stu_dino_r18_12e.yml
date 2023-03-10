@@ -22,7 +22,7 @@ DETR:
   backbone: ResNet
   transformer: DINOTransformer
   detr_head: DINOHead
-  post_process: DETRBBoxPostProcess
+  post_process: DETRPostProcess
 
 for_distill: True
 
