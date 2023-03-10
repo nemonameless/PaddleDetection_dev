@@ -51,6 +51,9 @@ def build_slim_model(cfg, slim_cfg, mode='train'):
         elif "slim_method" in slim_load_cfg and slim_load_cfg[
                 'slim_method'] == "PPYOLOEDistill":
             model = PPYOLOEDistillModel(cfg, slim_cfg)
+        elif "slim_method" in slim_load_cfg and slim_load_cfg[
+                'slim_method'] == "KDDETR":
+            model = KDDETRDistillModel(cfg, slim_cfg)
         else:
             # common distillation model
             model = DistillModel(cfg, slim_cfg)

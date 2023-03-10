@@ -1,0 +1,27 @@
+_BASE_: [
+  '../../datasets/coco_detection.yml',
+  '../../runtime.yml',
+  '../_base_/optimizer_1x.yml',
+  '../_base_/dino_r50.yml',
+  '../_base_/dino_reader.yml',
+]
+
+weights: output/dino_r50_4scale_1x_coco/model_final
+find_unused_parameters: True
+log_iter: 100
+snapshot_epoch: 1
+
+
+architecture: DETR
+pretrain_weights: https://paddledet.bj.bcebos.com/models/pretrained/ResNet50_cos_pretrained.pdparams
+hidden_dim: 256
+use_focal_loss: True
+
+
+DETR:
+  backbone: ResNet
+  transformer: DINOTransformer
+  detr_head: DINOHead
+  post_process: DETRBBoxPostProcess
+
+for_distill: True
