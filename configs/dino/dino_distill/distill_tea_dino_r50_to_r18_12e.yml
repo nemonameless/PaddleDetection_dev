@@ -60,6 +60,6 @@ slim_method: KDDETR
 distill_loss: KDDETRLoss
 
 KDDETRLoss:
-  kd_hs: True
-  kd_reference: True
-  kd_enc: True
+  kd_hs: False
+  kd_reference: False
+  kd_enc: False

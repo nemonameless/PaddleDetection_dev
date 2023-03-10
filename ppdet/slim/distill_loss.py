@@ -921,8 +921,6 @@ class SSIM(nn.Layer):
 
 
 from ppdet.modeling.transformers.utils import bbox_cxcywh_to_xyxy
-# from ppdet.modeling.bbox_utils import bbox_iou
-from IPython import embed
 @register
 class KDDETRLoss(nn.Layer):
     """ This class computes the loss for Conditional DETR.
@@ -931,9 +929,9 @@ class KDDETRLoss(nn.Layer):
         2) we supervise each pair of matched ground-truth / prediction (supervise class and box)
     """
     def __init__(self,
-                 kd_hs=True,
-                 kd_reference=True,
-                 kd_enc=True):
+                 kd_hs=False,
+                 kd_reference=False,
+                 kd_enc=False):
         super().__init__()
         self.T = 10
         self.weight_dict = {}
@@ -944,12 +942,6 @@ class KDDETRLoss(nn.Layer):
         self.weight_dict.update({'loss_kd_auxrf_cls':1})
         self.weight_dict.update({'loss_kd_auxrf_bbox':5})
         self.weight_dict.update({'loss_kd_auxrf_giou':2})
-
-        self.loss_kd_cls = self.loss_kl_div
-        self.loss_kd_box = self.loss_boxes 
-        self.weight_dict.update({'loss_kd_cls':1})
-        self.weight_dict.update({'loss_kd_bbox':5})
-        self.weight_dict.update({'loss_kd_giou':2})
 
         if kd_hs:
             self.kd_hs = True
@@ -1090,8 +1082,7 @@ class KDDETRLoss(nn.Layer):
         loss_bbox = F.l1_loss(pred, soft_label, reduction='none').mean(1)
         losses['loss_bbox'] = sum(loss_bbox * weight) / weight.sum()
 
-        gious = self.giou_loss(bbox_cxcywh_to_xyxy(pred), bbox_cxcywh_to_xyxy(soft_label))
-        loss_giou = 1 - gious.squeeze(-1)
+        loss_giou = self.giou_loss(bbox_cxcywh_to_xyxy(pred), bbox_cxcywh_to_xyxy(soft_label)).squeeze(-1)
         # loss_giou = 1 - bbox_iou(
         #     bbox_cxcywh_to_xyxy(pred.split(4, -1)),
         #     bbox_cxcywh_to_xyxy(soft_label.split(4, -1)), giou=True)
