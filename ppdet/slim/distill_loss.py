@@ -37,6 +37,7 @@ __all__ = [
     'PKDFeatureLoss',
     'MGDFeatureLoss',
     'DistillPPDINOLoss',
+    'KDDETRLoss',
 ]
 
 
@@ -1115,3 +1116,174 @@ class SSIM(nn.Layer):
 
         return self._ssim(img1, img2, window, self.window_size, channel,
                           self.size_average)
+
+
+from ppdet.modeling.transformers.utils import bbox_cxcywh_to_xyxy
+from IPython import embed
+@register
+class KDDETRLoss(nn.Layer):
+    """ This class computes the loss for Conditional DETR.
+    The process happens in two steps:
+        1) we compute hungarian assignment between ground truth boxes and the outputs of the model
+        2) we supervise each pair of matched ground-truth / prediction (supervise class and box)
+    """
+    def __init__(self,
+                 kd_hs=False,
+                 kd_reference=False,
+                 kd_enc=False):
+        super().__init__()
+        self.T = 10
+        self.weight_dict = {}
+        self.giou_loss = GIoULoss()
+
+        self.loss_kd_auxrf_cls = self.loss_kl_div
+        self.loss_kd_auxrf_box = self.loss_boxes 
+        self.weight_dict.update({'loss_kd_auxrf_cls':1})
+        self.weight_dict.update({'loss_kd_auxrf_bbox':5})
+        self.weight_dict.update({'loss_kd_auxrf_giou':2})
+
+        if kd_hs:
+            self.kd_hs = True
+            self.loss_kd_hs = self.loss_mse
+            self.weight_dict.update({'loss_kd_hs': 1})
+        else:
+            self.kd_hs = False
+
+        if kd_reference:
+            self.kd_reference = True
+            self.loss_kd_reference = self.loss_mse
+            self.weight_dict.update({'loss_kd_reference':1})
+        else:
+            self.kd_reference = False
+
+        if kd_enc:
+            self.kd_enc = True
+            self.loss_kd_enc_cls = self.loss_kl_div
+            self.loss_kd_enc_box = self.loss_boxes 
+            self.loss_kd_enc_memory = self.loss_mse
+            self.weight_dict.update({'loss_kd_enc_cls':1})
+            self.weight_dict.update({'loss_kd_enc_bbox':5})
+            self.weight_dict.update({'loss_kd_enc_giou':2})
+            self.weight_dict.update({'loss_kd_enc_memory':0.01})
+        else:
+            self.kd_enc = False
+
+    def forward(self, student_model, teacher_model):
+        outputs = student_model.transformer.distill_pairs
+        soft_targets = teacher_model.transformer.distill_pairs
+
+        losses = {}
+        # weight = soft_targets['pred_logits'].flatten(0, 1)
+        # weight = weight.sigmoid().max(1)[0].detach()
+        weight = soft_targets['pred_logits'] # [2, 900, 80]
+        weight = F.sigmoid(soft_targets['pred_logits']).max(2).detach() # [2, 900]
+        weight = weight.flatten() # [1800]
+ 
+        loss_kd_auxrf_cls = self.loss_kd_auxrf_cls(
+            outputs['aux_pred_logits'], soft_targets['pred_logits'], weight) # [2, 900, 80]
+        loss_tmp = self.loss_kd_auxrf_box(
+            outputs['aux_pred_boxes'], soft_targets['pred_boxes'], weight) # [2, 900, 4]
+        loss_kd_auxrf_bbox = loss_tmp['loss_bbox']
+        loss_kd_auxrf_giou = loss_tmp['loss_giou']
+
+        for aux_output_pred_logits, aux_output_pred_boxes in zip(outputs['auxrf_aux_outputs']['pred_logits'], outputs['auxrf_aux_outputs']['pred_boxes']):
+            loss_kd_auxrf_cls += self.loss_kd_auxrf_cls(
+                aux_output_pred_logits, soft_targets['pred_logits'], weight)
+            loss_tmp = self.loss_kd_auxrf_box(
+                aux_output_pred_boxes, soft_targets['pred_boxes'], weight)
+            loss_kd_auxrf_bbox += loss_tmp['loss_bbox']
+            loss_kd_auxrf_giou += loss_tmp['loss_giou']
+
+        losses.update(dict(loss_kd_auxrf_cls=loss_kd_auxrf_cls,
+                           loss_kd_auxrf_bbox=loss_kd_auxrf_bbox,
+                           loss_kd_auxrf_giou=loss_kd_auxrf_giou))
+
+        if self.kd_hs:
+            # aux hs
+            soft_hs = soft_targets['hs'][-1].flatten(0, 1).unsqueeze(1).tile([1, 6, 1]).flatten(1, 2) # [1800, 1536]                      
+            hs = outputs['aux_hs'].flatten(1, 2).transpose([1, 0, 2]).flatten(1, 2) # [1800, 1536]
+            loss_kd_hs = self.loss_kd_hs(hs, soft_hs, weight)                                                     
+            losses.update(dict(loss_kd_hs=loss_kd_hs))
+
+        if self.kd_reference:
+            # aux reference, must be sigmoid
+            soft_reference = soft_targets['reference'][-1].flatten(0, 1).unsqueeze(1).tile([1, 6, 1]).flatten(1, 2) # [1800, 24]
+            reference = outputs['aux_reference'].flatten(1, 2).transpose([1, 0, 2]).flatten(1, 2) # [1800, 24]
+            loss_kd_reference = self.loss_kd_reference(reference, soft_reference, weight)
+            losses.update(dict(loss_kd_reference=loss_kd_reference))
+
+        if self.kd_enc:
+            num_queries = 900
+            topk_weights, topk_ind = paddle.topk(F.sigmoid(soft_targets['enc_class']).max(-1), k=num_queries, axis=1)
+            topk_weights = topk_weights.flatten() # [1800]
+            bs, _, _ = soft_targets['enc_class'].shape
+            batch_ind = paddle.arange(end=bs, dtype=topk_ind.dtype)
+            batch_ind = batch_ind.unsqueeze(-1).tile([1, num_queries])
+            topk_ind = paddle.stack([batch_ind, topk_ind], axis=-1)
+
+            # extract region proposal boxes
+            enc_ref = paddle.gather_nd(outputs['enc_coord'], topk_ind) # [2, 10458, 4]->[2, 900, 4]
+            enc_cls = paddle.gather_nd(outputs['enc_class'], topk_ind) # [2, 900, 80]
+            enc_memory = paddle.gather_nd(outputs['enc_memory'], topk_ind) # [2, 900, 256]
+
+            soft_enc_ref = paddle.gather_nd(soft_targets['enc_coord'], topk_ind) # [2, 10458, 4]->[2, 900, 4]
+            soft_enc_cls = paddle.gather_nd(soft_targets['enc_class'], topk_ind) # [2, 900, 80]
+            soft_enc_memory = paddle.gather_nd(soft_targets['enc_memory'], topk_ind) # [2, 900, 256]
+
+            # weight, topk_ind = paddle.topk(enc_outputs_class_unselected.max(-1)[0], 900, axis=1)
+            loss_kd_enc_cls = self.loss_kd_enc_cls(
+                enc_cls, soft_enc_cls, topk_weights)
+            loss_kd_enc_box = self.loss_kd_enc_box(
+                F.sigmoid(enc_ref), F.sigmoid(soft_enc_ref), topk_weights)
+            loss_kd_enc_memory = self.loss_kd_enc_memory(
+                enc_memory.flatten(0, 1), soft_enc_memory.flatten(0, 1), topk_weights)
+            losses.update(dict(loss_kd_enc_cls=loss_kd_enc_cls,
+                               loss_kd_enc_bbox=loss_kd_enc_box['loss_bbox'],
+                               loss_kd_enc_giou=loss_kd_enc_box['loss_giou'],
+                               loss_kd_enc_memory=loss_kd_enc_memory))
+        return losses
+        # kd_losses = sum(losses[k] * self.weight_dict[k] for k in losses.keys() if k in self.weight_dict)
+        # return kd_losses
+
+    def loss_kl_div(self, pred, soft_label, weight=None):
+        assert pred.shape == soft_label.shape
+        if len(pred.shape) == 3: # [2, 900, 80] [bs, query_num, dim]
+            pred = pred.flatten(0, 1) # [1800, 80]
+            soft_label = soft_label.flatten(0, 1)
+        target = F.softmax(soft_label / self.T, axis=1)
+        target = target.detach()
+        kd_loss = F.kl_div(F.log_softmax(pred / self.T, axis=1), target, reduction='none').mean(1) * self.T * self.T 
+        if weight is not None:
+            kd_loss = sum(kd_loss * weight)
+        else:
+            kd_loss = kd_loss.mean()
+        return kd_loss
+
+    def loss_mse(self, pred, soft_label, weight=None):
+        assert pred.shape == soft_label.shape
+        soft_label = soft_label.detach()
+        if weight is None:                                                                                                   
+            return F.mse_loss(pred, soft_label, size_average=False)                                                          
+        else:                                                                                                                
+            losses = F.mse_loss(pred, soft_label, reduction='none')                                                          
+            losses = losses.mean(1)                                                                                          
+            return (losses * weight).sum()   
+
+    def loss_boxes(self, pred, soft_label, weight=None):
+        """Compute the losses related to the bounding boxes, the L1 regression loss and the GIoU loss
+           targets dicts must contain the key "boxes" containing a tensor of dim [nb_target_boxes, 4]
+           The target boxes are expected in format (center_x, center_y, w, h), normalized by the image size.
+        """
+        losses = {}
+        if len(pred.shape) == 3:
+            pred = pred.flatten(0, 1)
+            soft_label = soft_label.flatten(0, 1)
+        loss_bbox = F.l1_loss(pred, soft_label, reduction='none').mean(1)
+        losses['loss_bbox'] = sum(loss_bbox * weight) / weight.sum()
+
+        loss_giou = self.giou_loss(bbox_cxcywh_to_xyxy(pred), bbox_cxcywh_to_xyxy(soft_label)).squeeze(-1)
+        # loss_giou = 1 - bbox_iou(
+        #     bbox_cxcywh_to_xyxy(pred.split(4, -1)),
+        #     bbox_cxcywh_to_xyxy(soft_label.split(4, -1)), giou=True)
+        losses['loss_giou'] = sum(loss_giou * weight) / weight.sum()
+        return losses

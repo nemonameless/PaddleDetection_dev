@@ -56,10 +56,13 @@ snapshot_epoch: 1
 for_distill: True
 
 slim: Distill
-slim_method: KDDETR
-distill_loss: KDDETRLoss
+slim_method: PPDINODistill
+distill_loss: DistillPPDINOLoss
 
-KDDETRLoss:
-  kd_hs: False
-  kd_reference: False
-  kd_enc: False
+DistillPPDINOLoss: # r50 -> r18
+  loss_weight: {'logits': 1.0, 'feat': 20.0}
+  logits_distill: True
+  #logits_distill: False
+  #feat_distill: True
+  feat_distill: False
+  feat_distiller: 'aafd'
