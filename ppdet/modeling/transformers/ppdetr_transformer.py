@@ -426,7 +426,7 @@ class PPDETRTransformer(nn.Layer):
             self.query_pos_head,
             attn_mask=attn_mask)
 
-        if aux_refpoints is not None:
+        if self.for_distill and aux_refpoints is not None:
             # tgt_embed, refpoint_embed, attn_mask = aux_refpoints from teacher
             # target, init_ref_points_unact, attn_mask = aux_refpoints from teacher
             out_bboxes_aux, out_logits_aux, inter_feats_aux, inter_ref_bboxes_aux = self.decoder(
@@ -463,14 +463,14 @@ class PPDETRTransformer(nn.Layer):
             self.distill_pairs['enc_coord'] = enc_outputs_coord_unact
             self.distill_pairs['enc_memory'] = enc_output_memory
 
-            self.distill_pairs['hs'] = inter_feats
-            self.distill_pairs['reference'] = inter_ref_bboxes
+            self.distill_pairs['hs'] = paddle.stack(inter_feats)
+            self.distill_pairs['reference'] = paddle.stack(inter_ref_bboxes)
             self.distill_pairs['pred_logits'] = out_logits[-1]
             self.distill_pairs['pred_boxes'] = out_bboxes[-1]
 
             if inter_feats_aux is not None:
-                self.distill_pairs['aux_hs'] = inter_feats_aux # hs_aux
-                self.distill_pairs['aux_reference'] = inter_ref_bboxes_aux
+                self.distill_pairs['aux_hs'] = paddle.stack(inter_feats_aux)
+                self.distill_pairs['aux_reference'] = paddle.stack(inter_ref_bboxes_aux)
                 self.distill_pairs['aux_pred_logits'] = out_logits_aux[-1]
                 self.distill_pairs['aux_pred_boxes'] = out_bboxes_aux[-1]
                 self.distill_pairs['auxrf_aux_outputs'] = {}
