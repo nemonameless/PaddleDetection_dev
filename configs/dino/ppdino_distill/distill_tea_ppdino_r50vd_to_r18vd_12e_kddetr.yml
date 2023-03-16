@@ -58,12 +58,12 @@ DINOHead:
     loss_coeff: {class: 1, bbox: 5, giou: 2}
     aux_loss: True
     use_vfl: True
-    use_same_match: True
-    same_match_ind: 0
+    # use_same_match: True
+    # same_match_ind: 0
     matcher:
       name: HungarianMatcher
       matcher_coeff: {class: 2, bbox: 5, giou: 2}
-      use_pos_only: True
+      # use_pos_only: True
 
 DETRBBoxPostProcess:
   num_top_queries: 300
@@ -81,5 +81,5 @@ distill_loss: KDDETRLoss
 
 KDDETRLoss:
   kd_hs: False
-  kd_reference: False
-  kd_enc: False
+  kd_reference: True #False
+  kd_enc: True #False

@@ -65,7 +65,7 @@ class DistillModel(nn.Layer):
         self.distill_cfg = slim_cfg
 
         # load pretrain weights
-        self.is_inherit = False
+        self.is_inherit = True # False
         if stu_pretrain:
             if self.is_inherit and tea_pretrain:
                 load_pretrain_weight(self.student_model, tea_pretrain)
