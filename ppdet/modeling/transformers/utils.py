@@ -128,7 +128,8 @@ def get_contrastive_denoising_training_group(targets,
                                              class_embed,
                                              num_denoising=100,
                                              label_noise_ratio=0.5,
-                                             box_noise_scale=1.0):
+                                             box_noise_scale=1.0,
+                                             tea_num_queries=300):
     if num_denoising <= 0:
         return None, None, None, None
     num_gts = [len(t) for t in targets["gt_class"]]
@@ -202,6 +203,32 @@ def get_contrastive_denoising_training_group(targets,
         class_embed, input_query_class.flatten(),
         axis=0).reshape([bs, num_denoising, -1])
 
+    if tea_num_queries > num_queries:
+        tgt_size = num_denoising + tea_num_queries
+        tea_attn_mask = paddle.ones([tgt_size, tgt_size]) < 0
+        # match query cannot see the reconstruct
+        tea_attn_mask[num_denoising:, :num_denoising] = True
+        # reconstruct cannot see each other
+        for i in range(num_group):
+            if i == 0:
+                tea_attn_mask[max_gt_num * 2 * i:max_gt_num * 2 * (i + 1), max_gt_num *
+                        2 * (i + 1):num_denoising] = True
+            if i == num_group - 1:
+                tea_attn_mask[max_gt_num * 2 * i:max_gt_num * 2 * (i + 1), :max_gt_num *
+                        i * 2] = True
+            else:
+                tea_attn_mask[max_gt_num * 2 * i:max_gt_num * 2 * (i + 1), max_gt_num *
+                        2 * (i + 1):num_denoising] = True
+                tea_attn_mask[max_gt_num * 2 * i:max_gt_num * 2 * (i + 1), :max_gt_num *
+                        2 * i] = True
+        tea_attn_mask = ~tea_attn_mask
+        tea_dn_meta = {
+            "dn_positive_idx": dn_positive_idx,
+            "dn_num_group": num_group,
+            "dn_num_split": [num_denoising, tea_num_queries]
+        }
+
+
     tgt_size = num_denoising + num_queries
     attn_mask = paddle.ones([tgt_size, tgt_size]) < 0
     # match query cannot see the reconstruct
@@ -226,7 +253,10 @@ def get_contrastive_denoising_training_group(targets,
         "dn_num_split": [num_denoising, num_queries]
     }
 
-    return input_query_class, input_query_bbox, attn_mask, dn_meta
+    if tea_num_queries > num_queries:
+        return input_query_class, input_query_bbox, attn_mask, dn_meta, tea_attn_mask, tea_dn_meta
+    else:
+        return input_query_class, input_query_bbox, attn_mask, dn_meta
 
 
 def get_sine_pos_embed(pos_tensor,

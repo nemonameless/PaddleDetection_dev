@@ -1,0 +1,73 @@
+architecture: DETR
+# pretrain_weights: https://paddledet.bj.bcebos.com/models/pretrained/ResNet50_cos_pretrained.pdparams
+norm_type: sync_bn
+use_ema: True
+ema_decay: 0.9999
+ema_decay_type: "exponential"
+hidden_dim: 256
+use_focal_loss: True
+
+
+DETR:
+  backbone: ResNet
+  transformer: DINOTransformer
+  detr_head: DINOHead
+  neck: ~
+  post_process: DETRBBoxPostProcess
+
+ResNet:
+  # index 0 stands for res2
+  depth: 50
+  variant: b
+  norm_type: bn
+  freeze_at: 0
+  return_idx: [1, 2, 3]
+  lr_mult_list: [0.1, 0.1, 0.1, 0.1]
+  num_stages: 4
+
+DINOTransformer:
+  num_queries: 900 #
+  position_embed_type: sine
+  num_levels: 4
+  nhead: 8
+  num_encoder_layers: 6
+  num_decoder_layers: 6
+  dim_feedforward: 2048
+  dropout: 0.0
+  activation: relu
+  pe_temperature: 20
+  pe_offset: 0.0
+  num_denoising: 100
+  label_noise_ratio: 0.5
+  box_noise_scale: 1.0
+  learnt_init_query: True
+
+DINOHead:
+  loss:
+    name: DINOLoss
+    loss_coeff: {class: 1, bbox: 5, giou: 2}
+    aux_loss: True
+    use_vfl: True #
+    matcher:
+      name: HungarianMatcher
+      matcher_coeff: {class: 2, bbox: 5, giou: 2}
+
+DETRBBoxPostProcess:
+  num_top_queries: 300
+
+
+pretrain_weights: /root/.cache/paddle/weights/dino_r50_4scale_2x_coco_50.8.pdparams
+pretrain_weights: https://bj.bcebos.com/v1/paddledet/models/legacy_model/dino_r50_4scale_3x_coco_51.0.pdparams
+log_iter: 20
+snapshot_epoch: 1
+
+for_distill: True
+
+slim: Distill
+slim_method: KDDETR
+distill_loss: KDDETRLoss
+
+KDDETRLoss:
+  kd_hs: False
+  kd_reference: False
+  kd_enc: False

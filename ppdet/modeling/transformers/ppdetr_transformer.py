@@ -381,9 +381,17 @@ class PPDETRTransformer(nn.Layer):
 
     def forward(self, feats, pad_mask=None, gt_meta=None):
         # feats: [2, 512, 80, 80] [2, 512, 40, 40] [2, 512, 20, 20]
-        if self.for_distill:
-            aux_refpoints = gt_meta.get('aux_refpoints', None)
-
+        tea_num_queries = gt_meta.get('tea_num_queries', self.num_queries)
+        assert tea_num_queries >= self.num_queries
+        if tea_num_queries == self.num_queries:
+            return self.forward_same_num_queries(feats, pad_mask, gt_meta)
+        else:
+            # only in training
+            return self.forward_diff_num_queries(feats, pad_mask, gt_meta, tea_num_queries)
+        
+    def forward_same_num_queries(self, feats, pad_mask=None, gt_meta=None):
+        # only for distill
+        aux_refpoints = gt_meta.get('aux_refpoints', None)
         # input projection and embedding
         (memory, spatial_shapes,
          level_start_index) = self._get_encoder_input(feats)
@@ -411,7 +419,7 @@ class PPDETRTransformer(nn.Layer):
         target, init_ref_points_unact, enc_topk_bboxes, enc_topk_logits, \
         enc_outputs_class, enc_outputs_coord_unact, enc_output_memory = \
             self._get_decoder_input(
-            memory, spatial_shapes, denoising_class, denoising_bbox_unact)
+            memory, spatial_shapes, denoising_class, denoising_bbox_unact, self.num_queries)
         # [2, 300, 256] [2, 300, 4] [2, 300, 4] [2, 300, 80]
 
         # decoder
@@ -484,6 +492,112 @@ class PPDETRTransformer(nn.Layer):
         return (out_bboxes, out_logits, enc_topk_bboxes, enc_topk_logits,
                 dn_meta)
 
+    def forward_diff_num_queries(self, feats, pad_mask=None, gt_meta=None, tea_num_queries=900):
+        # only for distill
+        aux_refpoints = gt_meta.get('aux_refpoints', None)
+        # input projection and embedding
+        (memory, spatial_shapes,
+         level_start_index) = self._get_encoder_input(feats)
+        # memory.shape [1, 8400, 256]
+
+        # prepare denoising training
+        is_teacher = gt_meta.get('is_teacher', False)
+        if self.training and not is_teacher:
+            denoising_class, denoising_bbox_unact, attn_mask, dn_meta, tea_attn_mask, tea_dn_meta = \
+                get_contrastive_denoising_training_group(gt_meta,
+                                            self.num_classes,
+                                            self.num_queries,
+                                            self.denoising_class_embed.weight,
+                                            self.num_denoising,
+                                            self.label_noise_ratio,
+                                            self.box_noise_scale,
+                                            tea_num_queries=tea_num_queries)
+        else:
+            denoising_class, denoising_bbox_unact, attn_mask, dn_meta = None, None, None, None
+
+        target, init_ref_points_unact, tea_target, tea_init_ref_points_unact, enc_topk_bboxes, enc_topk_logits, \
+        enc_outputs_class, enc_outputs_coord_unact, enc_output_memory = \
+            self._get_decoder_input(
+            memory, spatial_shapes, denoising_class, denoising_bbox_unact, self.num_queries, tea_num_queries=tea_num_queries)
+        # [2, 300, 256] [2, 300, 4] [2, 300, 4] [2, 300, 80]
+
+        # decoder
+        out_bboxes, out_logits, inter_feats, inter_ref_bboxes = self.decoder(
+            target,
+            init_ref_points_unact,
+            memory,
+            spatial_shapes,
+            level_start_index,
+            self.dec_bbox_head,
+            self.dec_score_head,
+            self.query_pos_head,
+            attn_mask=attn_mask)
+
+        # decoder, only for student
+        if not is_teacher:
+            tea_out_bboxes, tea_out_logits, tea_inter_feats, tea_inter_ref_bboxes = self.decoder(
+                tea_target, #
+                tea_init_ref_points_unact, #
+                memory,
+                spatial_shapes,
+                level_start_index,
+                self.dec_bbox_head,
+                self.dec_score_head,
+                self.query_pos_head,
+                attn_mask=tea_attn_mask) #
+
+        if self.for_distill and aux_refpoints is not None: # only for student
+            # tgt_embed, refpoint_embed, attn_mask = aux_refpoints from teacher
+            # target, init_ref_points_unact, attn_mask = aux_refpoints from teacher
+            out_bboxes_aux, out_logits_aux, inter_feats_aux, inter_ref_bboxes_aux = self.decoder(
+                aux_refpoints[0],
+                aux_refpoints[1],
+                memory,
+                spatial_shapes,
+                level_start_index,
+                self.dec_bbox_head,
+                self.dec_score_head,
+                self.query_pos_head,
+                attn_mask=aux_refpoints[2])
+        else:
+            # only in teacher
+            inter_feats_aux = None
+            inter_ref_bboxes_aux = None
+
+        if self.for_distill:
+            self.distill_pairs['enc_class'] = enc_outputs_class
+            self.distill_pairs['enc_coord'] = enc_outputs_coord_unact
+            self.distill_pairs['enc_memory'] = enc_output_memory
+
+            if is_teacher:
+                self.distill_pairs['hs'] = paddle.stack(inter_feats)
+                self.distill_pairs['reference'] = paddle.stack(inter_ref_bboxes)
+                self.distill_pairs['pred_logits'] = out_logits[-1]
+                self.distill_pairs['pred_boxes'] = out_bboxes[-1]
+            else:
+                # same queries as teacher
+                self.distill_pairs['hs'] = paddle.stack(tea_inter_feats)
+                self.distill_pairs['reference'] = paddle.stack(tea_inter_ref_bboxes)
+                self.distill_pairs['pred_logits'] = tea_out_logits[-1]
+                self.distill_pairs['pred_boxes'] = tea_out_bboxes[-1]
+
+            if inter_feats_aux is not None: # only for student, same queries as teacher
+                self.distill_pairs['aux_hs'] = paddle.stack(inter_feats_aux)
+                self.distill_pairs['aux_reference'] = paddle.stack(inter_ref_bboxes_aux)
+                self.distill_pairs['aux_pred_logits'] = out_logits_aux[-1]
+                self.distill_pairs['aux_pred_boxes'] = out_bboxes_aux[-1]
+                self.distill_pairs['auxrf_aux_outputs'] = {}
+                self.distill_pairs['auxrf_aux_outputs']['pred_logits'] = out_logits_aux[:-1]
+                self.distill_pairs['auxrf_aux_outputs']['pred_boxes'] = out_bboxes_aux[:-1]
+
+            # self.distill_pairs['dn_meta'] = dn_meta
+            self.distill_pairs['refpoints'] = (target.detach(), init_ref_points_unact.detach(), attn_mask)
+
+        # [1, 2, 300, 4] [1, 2, 300, 80]
+        return (out_bboxes, out_logits, enc_topk_bboxes, enc_topk_logits,
+                dn_meta)
+
+
     def _generate_anchors(self,
                           spatial_shapes=None,
                           grid_size=0.05,
@@ -521,7 +635,9 @@ class PPDETRTransformer(nn.Layer):
                            memory,
                            spatial_shapes,
                            denoising_class=None,
-                           denoising_bbox_unact=None):
+                           denoising_bbox_unact=None,
+                           num_queries=300,
+                           tea_num_queries=300):
         bs, _, _ = memory.shape
         # prepare input for decoder
         if self.training or self.eval_size is None:
@@ -537,11 +653,36 @@ class PPDETRTransformer(nn.Layer):
         enc_outputs_class = self.enc_score_head(output_memory)
         enc_outputs_coord_unact = self.enc_bbox_head(output_memory) + anchors
 
+        if tea_num_queries > num_queries:
+            _, topk_ind = paddle.topk(
+                enc_outputs_class.max(-1), tea_num_queries, axis=1)
+            # extract region proposal boxes
+            batch_ind = paddle.arange(end=bs, dtype=topk_ind.dtype)
+            batch_ind = batch_ind.unsqueeze(-1).tile([1, tea_num_queries])
+            topk_ind = paddle.stack([batch_ind, topk_ind], axis=-1)
+
+            tea_reference_points_unact = paddle.gather_nd(enc_outputs_coord_unact,
+                                                    topk_ind)  # unsigmoided.
+            # enc_topk_bboxes = F.sigmoid(reference_points_unact)
+            if denoising_bbox_unact is not None:
+                tea_reference_points_unact = paddle.concat(
+                    [denoising_bbox_unact, tea_reference_points_unact], 1)
+            # enc_topk_logits = paddle.gather_nd(enc_outputs_class, topk_ind)
+
+            # extract region features
+            if 0: #self.learnt_init_query:
+                tea_target = self.tgt_embed.weight.unsqueeze(0).tile([bs, 1, 1])
+            else:
+                tea_target = paddle.gather_nd(output_memory, topk_ind).detach()
+            if denoising_class is not None:
+                tea_target = paddle.concat([denoising_class, tea_target], 1)
+
+
         _, topk_ind = paddle.topk(
-            enc_outputs_class.max(-1), self.num_queries, axis=1)
+            enc_outputs_class.max(-1), num_queries, axis=1)
         # extract region proposal boxes
         batch_ind = paddle.arange(end=bs, dtype=topk_ind.dtype)
-        batch_ind = batch_ind.unsqueeze(-1).tile([1, self.num_queries])
+        batch_ind = batch_ind.unsqueeze(-1).tile([1, num_queries])
         topk_ind = paddle.stack([batch_ind, topk_ind], axis=-1)
 
         reference_points_unact = paddle.gather_nd(enc_outputs_coord_unact,
@@ -560,8 +701,10 @@ class PPDETRTransformer(nn.Layer):
         if denoising_class is not None:
             target = paddle.concat([denoising_class, target], 1)
 
-        if self.for_distill:
-            self.distill_pairs['proj_queries'] = paddle.gather_nd(output_memory, topk_ind).detach()
 
-        return target, reference_points_unact.detach(), enc_topk_bboxes, enc_topk_logits, \
-                enc_outputs_class, enc_outputs_coord_unact, enc_output_memory
+        if tea_num_queries > num_queries:
+            return target, reference_points_unact.detach(), tea_target, tea_reference_points_unact.detach(), enc_topk_bboxes, enc_topk_logits, \
+                    enc_outputs_class, enc_outputs_coord_unact, enc_output_memory
+        else:
+            return target, reference_points_unact.detach(), enc_topk_bboxes, enc_topk_logits, \
+                    enc_outputs_class, enc_outputs_coord_unact, enc_output_memory

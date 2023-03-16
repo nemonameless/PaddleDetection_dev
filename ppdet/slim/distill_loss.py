@@ -1213,7 +1213,7 @@ class KDDETRLoss(nn.Layer):
             losses.update(dict(loss_kd_reference=loss_kd_reference))
 
         if self.kd_enc:
-            num_queries = 900
+            num_queries = int(teacher_model.transformer.num_queries)
             topk_weights, topk_ind = paddle.topk(F.sigmoid(soft_targets['enc_class']).max(-1), k=num_queries, axis=1)
             topk_weights = topk_weights.flatten() # [1800]
             bs, _, _ = soft_targets['enc_class'].shape
@@ -1229,6 +1229,11 @@ class KDDETRLoss(nn.Layer):
             soft_enc_ref = paddle.gather_nd(soft_targets['enc_coord'], topk_ind) # [2, 10458, 4]->[2, 900, 4]
             soft_enc_cls = paddle.gather_nd(soft_targets['enc_class'], topk_ind) # [2, 900, 80]
             soft_enc_memory = paddle.gather_nd(soft_targets['enc_memory'], topk_ind) # [2, 900, 256]
+
+            # soft_enc_ref.stop_gradient = True
+            # soft_enc_cls.stop_gradient = True
+            # soft_enc_memory.stop_gradient = True
+            # topk_weights.stop_gradient = True
 
             # weight, topk_ind = paddle.topk(enc_outputs_class_unselected.max(-1)[0], 900, axis=1)
             loss_kd_enc_cls = self.loss_kd_enc_cls(

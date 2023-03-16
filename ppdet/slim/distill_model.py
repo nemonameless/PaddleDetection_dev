@@ -65,7 +65,7 @@ class DistillModel(nn.Layer):
         self.distill_cfg = slim_cfg
 
         # load pretrain weights
-        self.is_inherit = True # False
+        self.is_inherit = False
         if stu_pretrain:
             if self.is_inherit and tea_pretrain:
                 load_pretrain_weight(self.student_model, tea_pretrain)
@@ -413,15 +413,13 @@ class KDDETRDistillModel(DistillModel):
             self.arch)
 
     def forward(self, inputs):
-        with paddle.no_grad(): 
-            inputs['is_teacher'] = True
-            teacher_outs = self.teacher_model(inputs)
-
         if self.training:
-            # with paddle.no_grad(): 
-            #     inputs['is_teacher'] = True
-            #     teacher_outs = self.teacher_model(inputs)
+            with paddle.no_grad(): 
+                inputs['is_teacher'] = True
+                teacher_outs = self.teacher_model(inputs)
+
             inputs['is_teacher'] = False
+            inputs['tea_num_queries'] = self.teacher_model.transformer.num_queries
             inputs['aux_refpoints'] = self.teacher_model.transformer.distill_pairs['refpoints']
             student_loss = self.student_model(inputs)
 
