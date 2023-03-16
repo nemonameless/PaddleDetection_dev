@@ -39,6 +39,16 @@ logger = setup_logger('reader')
 
 MAIN_PID = os.getpid()
 
+__all__ = [
+    'TrainReader',
+    'EvalReader',
+    'TestReader',
+    'EvalMOTReader',
+    'TestMOTReader',
+    'SemiTrainReader',
+    'DistillTrainReader',
+]
+
 
 class Compose(object):
     def __init__(self, transforms, num_classes=80):
@@ -608,4 +618,272 @@ class SemiTrainReader(BaseSemiDataLoader):
         super(SemiTrainReader, self).__init__(
             sample_transforms, weak_aug, strong_aug, sup_batch_transforms,
             unsup_batch_transforms, sup_batch_size, unsup_batch_size, shuffle,
+            drop_last, num_classes, collate_batch, **kwargs)
+
+
+# For distill
+class Compose_Distill(object):
+    def __init__(self, base_transforms, stu_aug, tea_aug, num_classes=80):
+        self.base_transforms = base_transforms
+        self.base_transforms_cls = []
+        for t in self.base_transforms:
+            for k, v in t.items():
+                op_cls = getattr(transform, k)
+                f = op_cls(**v)
+                if hasattr(f, 'num_classes'):
+                    f.num_classes = num_classes
+                self.base_transforms_cls.append(f)
+
+        self.stu_augs = stu_aug
+        self.stu_augs_cls = []
+        for t in self.stu_augs:
+            for k, v in t.items():
+                op_cls = getattr(transform, k)
+                f = op_cls(**v)
+                if hasattr(f, 'num_classes'):
+                    f.num_classes = num_classes
+                self.stu_augs_cls.append(f)
+
+        self.tea_augs = tea_aug
+        self.tea_augs_cls = []
+        for t in self.tea_augs:
+            for k, v in t.items():
+                op_cls = getattr(transform, k)
+                f = op_cls(**v)
+                if hasattr(f, 'num_classes'):
+                    f.num_classes = num_classes
+                self.tea_augs_cls.append(f)
+
+    def __call__(self, data):
+        for f in self.base_transforms_cls:
+            try:
+                data = f(data)
+            except Exception as e:
+                stack_info = traceback.format_exc()
+                logger.warning("fail to map sample transform [{}] "
+                               "with error: {} and stack:\n{}".format(
+                                   f, e, str(stack_info)))
+                raise e
+
+        stu_data = deepcopy(data)
+        tea_data = deepcopy(data)
+        for f in self.stu_augs_cls:
+            try:
+                stu_data = f(stu_data)
+            except Exception as e:
+                stack_info = traceback.format_exc()
+                logger.warning("fail to map stu aug [{}] "
+                               "with error: {} and stack:\n{}".format(
+                                   f, e, str(stack_info)))
+                raise e
+
+        for f in self.tea_augs_cls:
+            try:
+                tea_data = f(tea_data)
+            except Exception as e:
+                stack_info = traceback.format_exc()
+                logger.warning("fail to map tea aug [{}] "
+                               "with error: {} and stack:\n{}".format(
+                                   f, e, str(stack_info)))
+                raise e
+
+        stu_data['tea_aug'] = tea_data
+        return stu_data
+
+
+class BatchCompose_Distill(object):
+    def __init__(self, transforms, tea_transforms, num_classes=80, collate_batch=True):
+        super(BatchCompose_Distill, self).__init__()
+        self.transforms = transforms
+        self.transforms_cls = []
+        for t in self.transforms:
+            for k, v in t.items():
+                op_cls = getattr(transform, k)
+                f = op_cls(**v)
+                if hasattr(f, 'num_classes'):
+                    f.num_classes = num_classes
+                self.transforms_cls.append(f)
+
+        self.tea_transforms = tea_transforms
+        self.tea_transforms_cls = []
+        for t in self.tea_transforms:
+            for k, v in t.items():
+                op_cls = getattr(transform, k)
+                f = op_cls(**v)
+                if hasattr(f, 'num_classes'):
+                    f.num_classes = num_classes
+                self.tea_transforms_cls.append(f)
+        self.tea_transforms = tea_transforms
+
+        self.collate_batch = collate_batch
+
+    def __call__(self, data):
+        # split tea_data from data(stu_data)
+        tea_data = []
+        for sample in data:
+            tea_data.append(sample['tea_aug'])
+            sample.pop('tea_aug')
+
+        for f in self.transforms_cls:
+            try:
+                data = f(data)
+                # tea_data = f(tea_data)
+            except Exception as e:
+                stack_info = traceback.format_exc()
+                logger.warning("fail to map batch transform [{}] "
+                               "with error: {} and stack:\n{}".format(
+                                   f, e, str(stack_info)))
+                raise e
+
+        for f in self.tea_transforms_cls:
+            try:
+                tea_data = f(tea_data)
+            except Exception as e:
+                stack_info = traceback.format_exc()
+                logger.warning("fail to map batch transform [{}] "
+                               "with error: {} and stack:\n{}".format(
+                                   f, e, str(stack_info)))
+                raise e
+
+        # remove keys which is not needed by model
+        extra_key = ['h', 'w', 'flipped']
+        for k in extra_key:
+            for sample in data:
+                if k in sample:
+                    sample.pop(k)
+            for sample in tea_data:
+                if k in sample:
+                    sample.pop(k)
+
+        # batch data, if user-define batch function needed
+        # use user-defined here
+        if self.collate_batch:
+            batch_data = default_collate_fn(data)
+            tea_batch_data = default_collate_fn(tea_data)
+            return batch_data, tea_batch_data
+        else:
+            batch_data = {}
+            for k in data[0].keys():
+                tmp_data = []
+                for i in range(len(data)):
+                    tmp_data.append(data[i][k])
+                if not 'gt_' in k and not 'is_crowd' in k and not 'difficult' in k:
+                    tmp_data = np.stack(tmp_data, axis=0)
+                batch_data[k] = tmp_data
+
+            tea_batch_data = {}
+            for k in tea_data[0].keys():
+                tmp_data = []
+                for i in range(len(tea_data)):
+                    tmp_data.append(tea_data[i][k])
+                if not 'gt_' in k and not 'is_crowd' in k and not 'difficult' in k:
+                    tmp_data = np.stack(tmp_data, axis=0)
+                tea_batch_data[k] = tmp_data
+
+        return batch_data, tea_batch_data
+
+
+class BaseDistillDataLoader(object):
+    def __init__(self,
+                 sample_transforms=[],
+                 stu_aug=[],
+                 tea_aug=[],
+                 stu_batch_transforms=[],
+                 tea_batch_transforms=[],
+                 batch_size=1,
+                 shuffle=True,
+                 drop_last=True,
+                 num_classes=80,
+                 collate_batch=True,
+                 use_shared_memory=False,
+                 **kwargs):
+        # transforms
+        self._sample_transforms_stu = Compose_Distill(
+            sample_transforms, stu_aug, tea_aug, num_classes=num_classes)
+        self._batch_transforms_stu = BatchCompose_Distill(
+            stu_batch_transforms, tea_batch_transforms, num_classes, collate_batch)
+        self.batch_size_stu = batch_size
+
+        # common
+        self.shuffle = shuffle
+        self.drop_last = drop_last
+        self.use_shared_memory = use_shared_memory
+        self.kwargs = kwargs
+
+    def __call__(self,
+                 dataset,
+                 worker_num,
+                 batch_sampler=None,
+                 return_list=False):
+        # student dataset 
+        self.dataset = dataset
+        self.dataset.check_or_download_dataset()
+        self.dataset.parse_dataset()
+        self.dataset.set_transform(self._sample_transforms_stu)
+        self.dataset.set_kwargs(**self.kwargs)
+        if batch_sampler is None:
+            self._batch_sampler= DistributedBatchSampler(
+                self.dataset,
+                batch_size=self.batch_size_stu,
+                shuffle=self.shuffle,
+                drop_last=self.drop_last)
+        else:
+            self._batch_sampler = batch_sampler
+
+        # DataLoader do not start sub-process in Windows and Mac
+        # system, do not need to use shared memory
+        use_shared_memory = self.use_shared_memory and \
+                            sys.platform not in ['win32', 'darwin']
+        # check whether shared memory size is bigger than 1G(1024M)
+        if use_shared_memory:
+            shm_size = _get_shared_memory_size_in_M()
+            if shm_size is not None and shm_size < 1024.:
+                logger.warning("Shared memory size is less than 1G, "
+                               "disable shared_memory in DataLoader")
+                use_shared_memory = False
+
+        self.dataloader_stu = DataLoader(
+            dataset=self.dataset,
+            batch_sampler=self._batch_sampler,
+            collate_fn=self._batch_transforms_stu,
+            num_workers=worker_num,
+            return_list=return_list,
+            use_shared_memory=use_shared_memory)
+
+        self.loader = iter(self.dataloader_stu)
+        return self
+
+    def __len__(self):
+        return len(self._batch_sampler)
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        return next(self.loader)
+
+    def next(self):
+        # python2 compatibility
+        return self.__next__()
+
+
+@register
+class DistillTrainReader(BaseDistillDataLoader):
+    __shared__ = ['num_classes']
+
+    def __init__(self,
+                 sample_transforms=[],
+                 stu_aug=[],
+                 tea_aug=[],
+                 stu_batch_transforms=[],
+                 tea_batch_transforms=[],
+                 batch_size=1,
+                 shuffle=True,
+                 drop_last=True,
+                 num_classes=80,
+                 collate_batch=True,
+                 **kwargs):
+        super(DistillTrainReader, self).__init__(
+            sample_transforms, stu_aug, tea_aug, stu_batch_transforms,
+            tea_batch_transforms, batch_size, shuffle,
             drop_last, num_classes, collate_batch, **kwargs)

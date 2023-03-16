@@ -414,14 +414,15 @@ class KDDETRDistillModel(DistillModel):
 
     def forward(self, inputs):
         if self.training:
+            inputs_stu, inputs_tea = inputs
             with paddle.no_grad(): 
-                inputs['is_teacher'] = True
-                teacher_outs = self.teacher_model(inputs)
+                inputs_tea['is_teacher'] = True
+                teacher_outs = self.teacher_model(inputs_tea)
 
-            inputs['is_teacher'] = False
-            inputs['tea_num_queries'] = self.teacher_model.transformer.num_queries
-            inputs['aux_refpoints'] = self.teacher_model.transformer.distill_pairs['refpoints']
-            student_loss = self.student_model(inputs)
+            inputs_stu['is_teacher'] = False
+            inputs_stu['tea_num_queries'] = self.teacher_model.transformer.num_queries
+            inputs_stu['aux_refpoints'] = self.teacher_model.transformer.distill_pairs['refpoints']
+            student_loss = self.student_model(inputs_stu)
 
             # kd_loss = self.distill_loss(self.student_model, self.teacher_model)
             losses = self.distill_loss(self.student_model, self.teacher_model)

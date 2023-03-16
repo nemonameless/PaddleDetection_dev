@@ -3,8 +3,8 @@ job_name=distill_stu_ppdino_r18vd_12e
 
 config=configs/dino/ppdino_distill/distill_stu_ppdino_r18vd_12e.yml
 #tea_config=configs/dino/ppdino_distill/distill_tea_ppdino_r50vd_to_r18vd_12e.yml
-#tea_config=configs/dino/ppdino_distill/distill_tea_dino_r50_to_ppdino_r18vd_12e_kddetr_q300.yml
-tea_config=configs/dino/ppdino_distill/distill_tea_dino_r50_to_ppdino_r18vd_12e_kddetr.yml
+tea_config=configs/dino/ppdino_distill/distill_tea_dino_r50_to_ppdino_r18vd_12e_kddetr_q300.yml
+#tea_config=configs/dino/ppdino_distill/distill_tea_dino_r50_to_ppdino_r18vd_12e_kddetr.yml
 
 log_dir=log_dir/distill_stu_ppdino_r18vd_12e
 weights=output/distill_tea_dino_r50_to_ppdino_r18vd_12e_kddetr/0.pdparams
