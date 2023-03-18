@@ -1048,10 +1048,6 @@ std::vector<paddle::Tensor> MSDeformableAttnCUDABackward(
 
   auto grad_value =
       paddle::full(value.shape(), 0, value.dtype(), paddle::GPUPlace());
-  auto grad_spatial_shapes =
-      paddle::full(value.shape(), 0, value.dtype(), paddle::GPUPlace());
-  auto grad_level_start_index =
-      paddle::full(value.shape(), 0, value.dtype(), paddle::GPUPlace());
   auto grad_sampling_locations =
       paddle::full(sampling_locations.shape(), 0, sampling_locations.dtype(),
                    paddle::GPUPlace());
@@ -1068,6 +1064,5 @@ std::vector<paddle::Tensor> MSDeformableAttnCUDABackward(
       grad_sampling_locations.data<float>(),
       grad_attention_weights.data<float>());
 
-  return {grad_value, grad_spatial_shapes, grad_level_start_index,
-          grad_sampling_locations, grad_attention_weights};
+  return {grad_value, grad_sampling_locations, grad_attention_weights};
 }

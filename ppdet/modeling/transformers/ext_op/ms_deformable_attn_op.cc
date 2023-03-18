@@ -59,7 +59,6 @@ PD_BUILD_OP(ms_deformable_attn)
 PD_BUILD_GRAD_OP(ms_deformable_attn)
     .Inputs({"Value", "SpatialShapes", "LevelIndex", "SamplingLocations",
              "AttentionWeights", paddle::Grad("Out")})
-    .Outputs({paddle::Grad("Value"), paddle::Grad("SpatialShapes"),
-              paddle::Grad("LevelIndex"), paddle::Grad("SamplingLocations"),
+    .Outputs({paddle::Grad("Value"), paddle::Grad("SamplingLocations"),
               paddle::Grad("AttentionWeights")})
     .SetKernelFn(PD_KERNEL(MSDeformableAttnCUDABackward));
