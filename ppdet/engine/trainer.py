@@ -36,7 +36,7 @@ from paddle.static import InputSpec
 from ppdet.optimizer import ModelEMA
 
 from ppdet.core.workspace import create
-from ppdet.utils.checkpoint import load_weight, load_pretrain_weight
+from ppdet.utils.checkpoint import load_weight, load_pretrain_weight, load_pretrain_weight_detr
 from ppdet.utils.visualizer import visualize_results, save_result
 from ppdet.metrics import Metric, COCOMetric, VOCMetric, WiderFaceMetric, get_infer_results, KeyPointTopDownCOCOEval, KeyPointTopDownMPIIEval, Pose3DEval
 from ppdet.metrics import RBoxMetric, JDEDetMetric, SNIPERCOCOMetric
@@ -394,10 +394,13 @@ class Trainer(object):
                     "metrics shoule be instances of subclass of Metric"
         self._metrics.extend(metrics)
 
-    def load_weights(self, weights):
+    def load_weights(self, weights, weights_detr=None):
         if self.is_loaded_weights:
             return
         self.start_epoch = 0
+        if weights_detr:
+            load_pretrain_weight_detr(self.model, weights_detr)
+            logger.debug("Inheriting! loading teacher weights to student model!")
         load_pretrain_weight(self.model, weights)
         logger.debug("Load weights {} to start training".format(weights))
 

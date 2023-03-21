@@ -1,0 +1,30 @@
+_BASE_: [
+  '../datasets/coco_detection.yml',
+  '../runtime.yml',
+  #'_base_/optimizer_60e.yml',
+  '_base_/optimizer_36e_drop.yml',
+  '_base_/dino_r50vd_pan.yml',
+  '_base_/yoloe_reader.yml',
+]
+
+weights: output/ppdino_swinL_pan_3_0_6_36e_coco/model_final
+find_unused_parameters: True
+log_iter: 100
+snapshot_epoch: 1
+
+
+pretrain_weights: https://bj.bcebos.com/v1/paddledet/models/pretrained/swin_large_patch4_window12_384_22kto1k_pretrained.pdparams
+pretrain_weights: https://bj.bcebos.com/v1/paddledet/models/dino_swin_large_384_4scale_3x_coco.pdparams
+DETR:
+  backbone: SwinTransformer
+  neck: HybridEncoder
+  transformer: PPDETRTransformer
+  detr_head: DINOHead
+  post_process: DETRPostProcess
+
+SwinTransformer:
+  arch: 'swin_L_384' # ['swin_T_224', 'swin_S_224', 'swin_B_224', 'swin_L_224', 'swin_B_384', 'swin_L_384']
+  ape: false
+  drop_path_rate: 0.2
+  patch_norm: true
+  out_indices: [1, 2, 3]

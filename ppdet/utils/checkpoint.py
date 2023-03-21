@@ -236,6 +236,49 @@ def load_pretrain_weight(model, pretrain_weight):
     logger.info('Finish loading model weights: {}'.format(weights_path))
 
 
+def load_pretrain_weight_detr(model, pretrain_weight):
+    if is_url(pretrain_weight):
+        pretrain_weight = get_weights_path(pretrain_weight)
+
+    path = _strip_postfix(pretrain_weight)
+    if not (os.path.isdir(path) or os.path.isfile(path) or
+            os.path.exists(path + '.pdparams')):
+        raise ValueError("Model pretrain path `{}` does not exists. "
+                         "If you don't want to load pretrain model, "
+                         "please delete `pretrain_weights` field in "
+                         "config file.".format(path))
+
+    model_dict = model.state_dict()
+
+    weights_path = path + '.pdparams'
+    param_state_dict = paddle.load(weights_path)
+    param_state_dict.pop('transformer.input_proj.0.conv.weight', None)
+    param_state_dict.pop('transformer.input_proj.0.norm.weight', None)
+    param_state_dict.pop('transformer.input_proj.0.norm.bias', None)
+    # param_state_dict.pop('transformer.input_proj.0.norm._mean', None)
+    # param_state_dict.pop('transformer.input_proj.0.norm._variance', None)
+    if 'focal' in pretrain_weight: # 5scale dino
+        param_state_dict.pop('transformer.input_proj.1.conv.weight', None)
+        param_state_dict.pop('transformer.input_proj.1.norm.weight', None)
+        param_state_dict.pop('transformer.input_proj.1.norm.bias', None)
+        # param_state_dict.pop('transformer.input_proj.1.norm._mean', None)
+        # param_state_dict.pop('transformer.input_proj.1.norm._variance', None)
+        
+    model_dict_ex = {k:v for k, v in model_dict.items() if 'backbone' not in k} #
+    param_state_dict_ex = {k:v for k, v in param_state_dict.items() if 'backbone' not in k} #
+
+    param_state_dict_ex = match_state_dict(model_dict_ex, param_state_dict_ex)
+
+    for k, v in param_state_dict_ex.items():
+        if isinstance(v, np.ndarray):
+            v = paddle.to_tensor(v)
+        if model_dict_ex[k].dtype != v.dtype:
+            param_state_dict_ex[k] = v.astype(model_dict_ex[k].dtype)
+
+    model.set_dict(param_state_dict_ex)
+    logger.info('/////////// Inherting loading proj encoder decoder weights: {}'.format(weights_path))
+
+
 def save_model(model,
                optimizer,
                save_dir,

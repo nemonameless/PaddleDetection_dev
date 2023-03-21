@@ -1,0 +1,28 @@
+_BASE_: [
+  '../datasets/coco_detection.yml',
+  '../runtime.yml',
+  #'_base_/optimizer_60e.yml',
+  '_base_/optimizer_36e_drop.yml',
+  '_base_/dino_r50vd_pan.yml',
+  '_base_/yoloe_reader.yml',
+]
+
+weights: output/dino_focalnetL_pan_3_0_6_36e_coco/model_final
+find_unused_parameters: True
+log_iter: 100
+snapshot_epoch: 1
+
+
+pretrain_weights: https://bj.bcebos.com/v1/paddledet/models/pretrained/focalnet_large_lrf_384_fl4_pretrained.pdparams
+pretrain_weights: https://bj.bcebos.com/v1/paddledet/models/dino_focalnet_large_fl4_3x_coco.pdparams
+# pretrain_weights: https://bj.bcebos.com/v1/paddledet/models/pretrained/focalnet_large_fl4_pretrained_on_o365.pdparams
+DETR:
+  backbone: FocalNet
+  neck: HybridEncoder
+  transformer: PPDETRTransformer
+  detr_head: DINOHead
+  post_process: DETRPostProcess
+
+FocalNet:
+  arch: 'focalnet_L_384_22k_fl4'
+  out_indices: [1, 2, 3]

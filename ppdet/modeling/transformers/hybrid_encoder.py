@@ -61,8 +61,8 @@ class TransformerLayer(nn.Layer):
     def __init__(self,
                  d_model,
                  nhead,
-                 dim_feedforward=2048,
-                 dropout=0.1,
+                 dim_feedforward=1024,
+                 dropout=0.,
                  activation="relu",
                  attn_dropout=None,
                  act_dropout=None,
@@ -195,9 +195,6 @@ class HybridEncoder(nn.Layer):
         self._reset_parameters()
 
     def _reset_parameters(self):
-        for l in self.input_proj:
-            xavier_uniform_(l[0].weight)
-
         if self.eval_size:
             for idx in self.use_encoder_idx:
                 stride = self.feat_strides[idx]
