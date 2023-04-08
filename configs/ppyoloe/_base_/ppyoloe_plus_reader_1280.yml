@@ -6,7 +6,7 @@ eval_size: &eval_size [*eval_height, *eval_width]
 TrainReader:
   sample_transforms:
     #  - Decode: {}
-    - DecodeCache: {cache_root: 'coco/cache/buffer'}
+    - DecodeCache: {cache_root: 'dataset/coco/cache/buffer'}
     - RandomDistort: {}
     - RandomExpand: {fill_value: [123.675, 116.28, 103.53]}
     - RandomCrop: {}
