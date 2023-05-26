@@ -583,7 +583,7 @@ class DINOTransformer(nn.Layer):
         # [6, 1, 1100, 256] [6, 1, 1100, 4] train
         # [6, 1, 900, 256] [6, 1, 900, 4] val
 
-        if aux_refpoints is not None:
+        if self.for_distill and aux_refpoints is not None:
             # tgt_embed, refpoint_embed, attn_mask = aux_refpoints from teacher
             # target, init_ref_points_unact, attn_mask = aux_refpoints from teacher
             #hs_aux, ref_aux, ref_undetach_aux = self.decoder(
